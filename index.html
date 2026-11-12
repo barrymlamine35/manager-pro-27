@@ -297,36 +297,41 @@ function pitchTexture(THREE, portrait){
 function makePawn(THREE, colorHex, label){
   var grp = new THREE.Group();
   var col = new THREE.Color(colorHex || "#3B82C4");
-  var body = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.52, 0.62, 1.15, 14),
-    new THREE.MeshLambertMaterial({ color: col })
+  var shadow = new THREE.Mesh(
+    new THREE.CircleGeometry(2.15, 24),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.32, depthWrite: false })
   );
-  body.position.y = 0.95; grp.add(body);
+  shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.04; grp.add(shadow);
   var base = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.95, 0.95, 0.16, 20),
+    new THREE.CylinderGeometry(2.0, 2.0, 0.3, 24),
     new THREE.MeshLambertMaterial({ color: 0xffffff })
   );
-  base.position.y = 0.08; grp.add(base);
+  base.position.y = 0.15; grp.add(base);
   var ring = new THREE.Mesh(
-    new THREE.TorusGeometry(0.95, 0.07, 8, 24),
-    new THREE.MeshLambertMaterial({ color: col })
+    new THREE.TorusGeometry(2.0, 0.14, 8, 28),
+    new THREE.MeshLambertMaterial({ color: col, emissive: col.clone().multiplyScalar(0.25) })
   );
-  ring.rotation.x = Math.PI / 2; ring.position.y = 0.17; grp.add(ring);
+  ring.rotation.x = Math.PI / 2; ring.position.y = 0.32; grp.add(ring);
+  var body = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.02, 1.3, 2.3, 18),
+    new THREE.MeshLambertMaterial({ color: col, emissive: col.clone().multiplyScalar(0.22) })
+  );
+  body.position.y = 1.45; grp.add(body);
   var head = new THREE.Mesh(
-    new THREE.SphereGeometry(0.37, 14, 12),
+    new THREE.SphereGeometry(0.78, 18, 14),
     new THREE.MeshLambertMaterial({ color: 0xE8B98A })
   );
-  head.position.y = 1.85; grp.add(head);
+  head.position.y = 3.2; grp.add(head);
   if (label != null && label !== ""){
-    var c = document.createElement("canvas"); c.width = 128; c.height = 128;
+    var c = document.createElement("canvas"); c.width = 160; c.height = 160;
     var g = c.getContext("2d");
-    g.beginPath(); g.arc(64, 64, 56, 0, Math.PI * 2);
-    g.fillStyle = "rgba(8,12,18,.78)"; g.fill();
-    g.lineWidth = 7; g.strokeStyle = "#F5B301"; g.stroke();
-    g.fillStyle = "#fff"; g.font = "900 " + (String(label).length > 2 ? 44 : 58) + "px Arial, sans-serif";
-    g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(String(label), 64, 68);
+    g.beginPath(); g.arc(80, 80, 70, 0, Math.PI * 2);
+    g.fillStyle = "rgba(8,12,18,.85)"; g.fill();
+    g.lineWidth = 9; g.strokeStyle = "#F5B301"; g.stroke();
+    g.fillStyle = "#fff"; g.font = "900 " + (String(label).length > 2 ? 52 : 72) + "px Arial, sans-serif";
+    g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(String(label), 80, 84);
     var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
-    sp.scale.set(1.9, 1.9, 1); sp.position.y = 2.95; grp.add(sp);
+    sp.scale.set(4.3, 4.3, 1); sp.position.y = 5.6; grp.add(sp);
   }
   return grp;
 }
@@ -419,13 +424,13 @@ function startLive3D(THREE, main, pitch){
   view.appendChild(renderer.domElement);
   var built = baseScene(THREE, false);
   var scene = built.scene, W = built.W, D = built.D;
-  var camera = new THREE.PerspectiveCamera(42, 16 / 10, 0.1, 400);
-  camera.position.set(0, 60, 57); camera.lookAt(0, 0, 1);
+  var camera = new THREE.PerspectiveCamera(48, 16 / 10, 0.1, 500);
+  camera.position.set(0, 68, 63); camera.lookAt(0, 0, 6);
   var gL = makeGoal(THREE, -1); gL.position.set(-W / 2, 0, 0); scene.add(gL);
   var gR = makeGoal(THREE, 1); gR.position.set(W / 2, 0, 0); scene.add(gR);
-  var ballMesh = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 12), new THREE.MeshLambertMaterial({ color: 0xffffff }));
-  ballMesh.position.y = 0.5; scene.add(ballMesh);
-  var cardMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 2.3), new THREE.MeshBasicMaterial({ color: 0xE9B949, side: THREE.DoubleSide, transparent: true }));
+  var ballMesh = new THREE.Mesh(new THREE.SphereGeometry(0.95, 18, 14), new THREE.MeshLambertMaterial({ color: 0xffffff }));
+  ballMesh.position.y = 0.95; scene.add(ballMesh);
+  var cardMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 3.5), new THREE.MeshBasicMaterial({ color: 0xE9B949, side: THREE.DoubleSide, transparent: true }));
   cardMesh.visible = false; scene.add(cardMesh);
   var pawns = [], sig = "";
   var S = {
@@ -480,7 +485,7 @@ function startLive3D(THREE, main, pitch){
     if (S.dead) return;
     if (!document.contains(pitch) || !document.contains(main)){ stopLive3D(); return; }
     var data = liveRead(pitch);
-    if (data.players.length >= 20) syncPawns(data);
+    if (data.players.length >= 10) syncPawns(data);
     if (data.banner && data.banner !== S.lastBanner){
       var gm = data.banner.match(/^But ! (.+) \d+'$/);
       if (gm){
@@ -516,6 +521,8 @@ function startLive3D(THREE, main, pitch){
       }
     }
   }, 140);
+  var d0 = liveRead(pitch);
+  if (d0.players.length) syncPawns(d0);
   var clock = new THREE.Clock();
   function tick(){
     if (S.dead) return;
@@ -525,7 +532,7 @@ function startLive3D(THREE, main, pitch){
       var dx = p.tx - p.grp.position.x, dz = p.tz - p.grp.position.z;
       p.grp.position.x += dx * 0.08; p.grp.position.z += dz * 0.08;
       var moving = Math.abs(dx) + Math.abs(dz) > 0.4;
-      p.grp.position.y = moving ? Math.abs(Math.sin(t * 9 + p.phase)) * 0.16 : 0;
+      p.grp.position.y = moving ? Math.abs(Math.sin(t * 9 + p.phase)) * 0.3 : 0;
       if (Math.abs(dx) > 0.05) p.grp.rotation.y = Math.atan2(dx, dz);
     });
     if (S.ballTx != null){
@@ -534,18 +541,18 @@ function startLive3D(THREE, main, pitch){
         fx.t += 0.045;
         ballMesh.position.x += (fx.gx - ballMesh.position.x) * 0.22;
         ballMesh.position.z += (0 - ballMesh.position.z) * 0.12;
-        ballMesh.position.y = 0.5 + Math.sin(Math.min(fx.t, 1) * Math.PI) * 1.4;
+        ballMesh.position.y = 0.95 + Math.sin(Math.min(fx.t, 1) * Math.PI) * 1.6;
         if (fx.pawn) fx.pawn.grp.position.y = Math.abs(Math.sin(fx.t * 9)) * 0.85;
         if (fx.t > 1.6){ if (fx.pawn) fx.pawn.grp.position.y = 0; S.fx = null; }
       } else if (fx && fx.kind === "occasion"){
         fx.t += 0.05;
-        if (fx.t < 0.5){ ballMesh.position.x += (fx.gx - ballMesh.position.x) * 0.3; ballMesh.position.y = 0.5 + Math.sin(fx.t * Math.PI) * 0.8; }
-        else { ballMesh.position.x += (S.ballTx - ballMesh.position.x) * 0.1; ballMesh.position.z += (S.ballTz - ballMesh.position.z) * 0.1; ballMesh.position.y += (0.5 - ballMesh.position.y) * 0.2; }
+        if (fx.t < 0.5){ ballMesh.position.x += (fx.gx - ballMesh.position.x) * 0.3; ballMesh.position.y = 0.95 + Math.sin(fx.t * Math.PI) * 0.9; }
+        else { ballMesh.position.x += (S.ballTx - ballMesh.position.x) * 0.1; ballMesh.position.z += (S.ballTz - ballMesh.position.z) * 0.1; ballMesh.position.y += (0.95 - ballMesh.position.y) * 0.2; }
         if (fx.t > 1.3) S.fx = null;
       } else {
         ballMesh.position.x += (S.ballTx - ballMesh.position.x) * 0.16;
         ballMesh.position.z += (S.ballTz - ballMesh.position.z) * 0.16;
-        ballMesh.position.y = 0.5;
+        ballMesh.position.y = 0.95;
       }
       ballMesh.rotation.x += 0.05; ballMesh.rotation.z += 0.03;
     }
@@ -553,7 +560,7 @@ function startLive3D(THREE, main, pitch){
       var fx2 = S.fx; fx2.t += 0.03;
       var anchor = fx2.pawn ? fx2.pawn.grp.position : { x: ballMesh.position.x, z: ballMesh.position.z };
       cardMesh.visible = true;
-      cardMesh.position.set(anchor.x, 4.4 - Math.min(fx2.t, 1) * 0.7, anchor.z);
+      cardMesh.position.set(anchor.x, 8.1 - Math.min(fx2.t, 1) * 0.8, anchor.z);
       cardMesh.rotation.y = fx2.t * 5;
       cardMesh.material.opacity = fx2.t > 0.8 ? Math.max(0, 1 - (fx2.t - 0.8) * 2) : 1;
       if (fx2.t > 1.3){ cardMesh.visible = false; S.fx = null; }
@@ -629,8 +636,8 @@ function startTac3D(THREE, section, pitch){
   view.appendChild(renderer.domElement);
   var built = baseScene(THREE, true);
   var scene = built.scene, W = built.W, D = built.D;
-  var camera = new THREE.PerspectiveCamera(40, pr.width / pr.height, 0.1, 400);
-  camera.position.set(0, 58, 66); camera.lookAt(0, 0, -6);
+  var camera = new THREE.PerspectiveCamera(50, pr.width / pr.height, 0.1, 500);
+  camera.position.set(0, 90, 64); camera.lookAt(0, 0, 8);
   var gT = makeGoal(THREE, 1); gT.rotation.y = Math.PI / 2; gT.position.set(0, 0, -D / 2); scene.add(gT);
   var gB = makeGoal(THREE, -1); gB.rotation.y = Math.PI / 2; gB.position.set(0, 0, D / 2); scene.add(gB);
   var S = { section: section, pitch: pitch, view: view, renderer: renderer, scene: scene, raf: 0, poll: 0, dead: false, drag: null, sig: "" };
@@ -638,8 +645,8 @@ function startTac3D(THREE, section, pitch){
   function toWorld(nx, ny){ return { x: (nx - 0.5) * (W - 6), z: (ny - 0.5) * (D - 6) }; }
   var pawns = players.map(function(p){
     var grp = makePawn(THREE, "#F4F6F8", p.ini || p.name.split(" ").map(function(w){ return w.charAt(0); }).join("").slice(0, 2).toUpperCase());
-    var hit = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 4.4, 8), new THREE.MeshBasicMaterial({ visible: false }));
-    hit.position.y = 2; grp.add(hit);
+    var hit = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 3.4, 7.5, 8), new THREE.MeshBasicMaterial({ visible: false }));
+    hit.position.y = 3.4; grp.add(hit);
     var w = toWorld(p.nx, p.ny);
     grp.position.set(w.x, 0, w.z);
     scene.add(grp);
@@ -717,8 +724,8 @@ function startTac3D(THREE, section, pitch){
       pawns.forEach(function(p){ scene.remove(p.grp); if (p.arrow) scene.remove(p.arrow); if (p.liveArrow) scene.remove(p.liveArrow); });
       pawns = now.map(function(p){
         var grp = makePawn(THREE, "#F4F6F8", p.ini || "");
-        var hit = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 4.4, 8), new THREE.MeshBasicMaterial({ visible: false }));
-        hit.position.y = 2; grp.add(hit);
+        var hit = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 3.4, 7.5, 8), new THREE.MeshBasicMaterial({ visible: false }));
+        hit.position.y = 3.4; grp.add(hit);
         var w = toWorld(p.nx, p.ny);
         grp.position.set(w.x, 0, w.z);
         scene.add(grp);
