@@ -229,6 +229,9 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
 .mp3d-view-crest{background:radial-gradient(130% 105% at 50% 0%,#1B3050 0%,#0D1B30 72%)}
 .mp3d-view-crest canvas{cursor:grab}
 .mp3d-view-crest canvas:active{cursor:grabbing}
+.mp3d-view-player{background:radial-gradient(130% 105% at 50% 0%,#173D27 0%,#0A1F13 72%)}
+.mp3d-view-player canvas{cursor:grab}
+.mp3d-view-player canvas:active{cursor:grabbing}
 </style>
 <script>
 (function(){
@@ -1659,9 +1662,399 @@ function attachGuideCrest(dlg){
   list.appendChild(sec);
 }
 
+/* ================= FICHE JOUEUR 3D (Phase 5) ================= */
+var player = null;
+var POS3D_SHORT = { "Gardien": "G", "Gardien de but": "G", "Défenseur central": "DC", "Arrière droit": "DD", "Arrière gauche": "DG", "Milieu défensif": "MDF", "Milieu central": "MC", "Milieu offensif": "MOC", "Ailier droit": "AD", "Ailier gauche": "AG", "Avant-centre": "BU", "Attaquant": "BU" };
+var CLUB3D_COLORS = ["#B91C1C", "#1D4ED8", "#0A9D66", "#F59E0B", "#7C3AED", "#0EA5E9", "#DB2777", "#EA580C", "#475569", "#0F766E"];
+function playerHash(str){
+  var a = 0;
+  for (var i = 0; i < str.length; i++) a = (a * 31 + str.charCodeAt(i)) | 0;
+  return Math.abs(a);
+}
+function findPlayerHead(panel){
+  if (!panel) return null;
+  for (var i = 0; i < panel.children.length; i++){
+    var k = panel.children[i];
+    if (!k.querySelectorAll) continue;
+    var ps = k.querySelectorAll("p");
+    for (var j = 0; j < ps.length; j++){
+      if ((ps[j].className || "").indexOf("text-2xl") >= 0 && /Note\s+\d+/.test(k.textContent || "")) return k;
+    }
+  }
+  return null;
+}
+function playerRead(head){
+  if (!head) return null;
+  var name = "", info = null;
+  head.querySelectorAll("p").forEach(function(p){
+    var t = (p.textContent || "").trim();
+    if (!name && (p.className || "").indexOf("text-2xl") >= 0) name = t;
+    if (!info && /Note\s+\d+/.test(t)) info = t;
+  });
+  if (!name || !info) return null;
+  var segs = info.split("·").map(function(s){ return s.trim(); });
+  var posRaw = segs[0] || "";
+  var club = segs[1] || "";
+  var mR = info.match(/Note\s+(\d+)/);
+  var mA = info.match(/(\d+)\s*ans/);
+  var rating = mR ? mR[1] : "";
+  if (!rating) return null;
+  var posShort = POS3D_SHORT[posRaw] || (/^[A-Z]{1,4}$/.test(posRaw) ? (posRaw === "GARD" ? "G" : posRaw) : posRaw.slice(0, 4).toUpperCase());
+  var gk = posShort === "G" || posRaw === "Gardien";
+  var color = null, number = null;
+  var label = "Ouvrir la fiche de " + name;
+  var cards = document.querySelectorAll('[aria-label="' + label.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"]');
+  for (var i = 0; i < cards.length && !color; i++){
+    var svgs = cards[i].querySelectorAll("svg");
+    for (var j = 0; j < svgs.length; j++){
+      if (svgs[j].getAttribute("viewBox") === "0 0 54 47"){
+        var path = svgs[j].querySelector("path");
+        var txt = svgs[j].querySelector("text");
+        if (path && path.getAttribute("fill")) color = path.getAttribute("fill");
+        if (txt && (txt.textContent || "").trim()) number = (txt.textContent || "").trim();
+        var posEl = cards[i].querySelector(".sq-pos");
+        if (posEl && (posEl.textContent || "").trim()) posShort = (posEl.textContent || "").trim();
+        break;
+      }
+    }
+  }
+  var h = playerHash(name);
+  if (!color) color = gk ? "#98A2B3" : CLUB3D_COLORS[playerHash(club || name) % CLUB3D_COLORS.length];
+  if (!number) number = String(h % 98 + 1);
+  var skins = ["#F2C89B", "#E0AC7E", "#C68863", "#9C6644", "#7B4B2A", "#5C3A21"];
+  var hairs = ["#191C22", "#3B2A1A", "#6B4A2A", "#9A7B2D", "#B9BDC4", "#4A4A4A"];
+  var data = {
+    name: name, club: club, age: mA ? mA[1] : "", rating: rating, posRaw: posRaw, posShort: posShort,
+    gk: gk, color: color, number: number,
+    skin: skins[h % skins.length], hair: hairs[Math.floor(h / 7) % hairs.length]
+  };
+  data.sig = [data.name, data.rating, data.posShort, data.club, data.color, data.number, data.skin, data.hair].join("|");
+  return data;
+}
+function hexRgb(hex){
+  var m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+  if (!m) return null;
+  var n = parseInt(m[1], 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+function playerFaceTexture(THREE, data){
+  var c = document.createElement("canvas"); c.width = 512; c.height = 712;
+  var g = c.getContext("2d");
+  var grad = g.createLinearGradient(0, 0, 0, 712);
+  grad.addColorStop(0, "#1C2942"); grad.addColorStop(0.55, "#111A2C"); grad.addColorStop(1, "#0A101D");
+  g.fillStyle = grad; g.fillRect(0, 0, 512, 712);
+  var rgb = hexRgb(data.color) || { r: 29, g: 78, b: 216 };
+  var bg = g.createLinearGradient(0, 0, 340, 190);
+  bg.addColorStop(0, "rgba(" + rgb.r + "," + rgb.g + "," + rgb.b + ",0.95)");
+  bg.addColorStop(1, "rgba(" + rgb.r + "," + rgb.g + "," + rgb.b + ",0.12)");
+  g.fillStyle = bg; g.fillRect(0, 0, 512, 196);
+  g.save();
+  g.beginPath(); g.moveTo(300, 0); g.lineTo(512, 0); g.lineTo(512, 196); g.lineTo(398, 196); g.closePath(); g.clip();
+  g.fillStyle = "rgba(255,255,255,0.10)"; g.fillRect(300, 0, 212, 196);
+  g.restore();
+  g.fillStyle = "#C9A227"; g.fillRect(0, 196, 512, 4);
+  g.lineJoin = "round"; g.textAlign = "left"; g.textBaseline = "alphabetic";
+  g.font = "900 150px 'Barlow Condensed','Arial Narrow',Arial,sans-serif";
+  g.strokeStyle = "rgba(6,10,16,0.55)"; g.lineWidth = 12;
+  g.strokeText(data.rating, 34, 152);
+  g.fillStyle = "#FFFFFF"; g.fillText(data.rating, 34, 152);
+  g.font = "800 56px 'Barlow Condensed','Arial Narrow',Arial,sans-serif";
+  g.strokeStyle = "rgba(6,10,16,0.45)"; g.lineWidth = 8;
+  g.strokeText(data.posShort, 38, 268);
+  g.fillStyle = "rgba(255,255,255,0.94)"; g.fillText(data.posShort, 38, 268);
+  g.fillStyle = "#C9A227"; g.fillRect(38, 288, 76, 5);
+  var ng = g.createLinearGradient(0, 540, 0, 712);
+  ng.addColorStop(0, "rgba(0,0,0,0)"); ng.addColorStop(1, "rgba(0,0,0,0.5)");
+  g.fillStyle = ng; g.fillRect(0, 540, 512, 172);
+  var nm = (data.name || "").toUpperCase();
+  var fs = 64;
+  g.font = "800 " + fs + "px 'Barlow Condensed','Arial Narrow',Arial,sans-serif";
+  while (g.measureText(nm).width > 448 && fs > 30){ fs -= 4; g.font = "800 " + fs + "px 'Barlow Condensed','Arial Narrow',Arial,sans-serif"; }
+  g.textAlign = "center";
+  g.strokeStyle = "rgba(6,10,16,0.5)"; g.lineWidth = 8;
+  g.strokeText(nm, 256, 638);
+  g.fillStyle = "#FFFFFF"; g.fillText(nm, 256, 638);
+  if (data.club){
+    g.font = "600 29px Arial,sans-serif";
+    g.fillStyle = "rgba(255,255,255,0.55)";
+    g.fillText(data.club, 256, 678);
+  }
+  var t = new THREE.CanvasTexture(c);
+  t.anisotropy = 8;
+  t.repeat.set(1 / 6.2, 1 / 8.6);
+  t.offset.set(0.5, 0.5);
+  return t;
+}
+function playerNumberTexture(THREE, data){
+  var c = document.createElement("canvas"); c.width = 256; c.height = 256;
+  var g = c.getContext("2d");
+  g.font = "900 " + (String(data.number).length > 1 ? 168 : 196) + "px 'Barlow Condensed','Arial Narrow',Arial,sans-serif";
+  g.textAlign = "center"; g.textBaseline = "middle"; g.lineJoin = "round";
+  g.strokeStyle = "rgba(0,0,0,0.45)"; g.lineWidth = 11;
+  g.strokeText(String(data.number), 128, 136);
+  g.fillStyle = data.gk ? "#B91C1C" : "#FFFFFF";
+  g.fillText(String(data.number), 128, 136);
+  var t = new THREE.CanvasTexture(c);
+  t.anisotropy = 8;
+  return t;
+}
+function roundedRectShape(THREE, w, h, r){
+  var s = new THREE.Shape(), x = -w / 2, y = -h / 2;
+  s.moveTo(x + r, y);
+  s.lineTo(x + w - r, y); s.quadraticCurveTo(x + w, y, x + w, y + r);
+  s.lineTo(x + w, y + h - r); s.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  s.lineTo(x + r, y + h); s.quadraticCurveTo(x, y + h, x, y + h - r);
+  s.lineTo(x, y + r); s.quadraticCurveTo(x, y, x + r, y);
+  return s;
+}
+function buildPlayerAvatar(THREE, data){
+  var grp = new THREE.Group();
+  var col = new THREE.Color(data.color);
+  var jersey = new THREE.MeshPhongMaterial({ color: col, shininess: 32, specular: 0x2A2A2A });
+  var skin = new THREE.MeshLambertMaterial({ color: new THREE.Color(data.skin) });
+  var hairM = new THREE.MeshLambertMaterial({ color: new THREE.Color(data.hair) });
+  var lum = (0.299 * col.r + 0.587 * col.g + 0.114 * col.b);
+  var shortsM = new THREE.MeshPhongMaterial({ color: lum > 0.62 ? 0x161B24 : 0xEDEFF3, shininess: 18 });
+  var bootM = new THREE.MeshLambertMaterial({ color: 0x14181F });
+  function add(geo, mat, x, y, z, rz){
+    var m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z || 0);
+    if (rz) m.rotation.z = rz;
+    grp.add(m); return m;
+  }
+  [-1, 1].forEach(function(sd){
+    add(new THREE.BoxGeometry(0.36, 0.2, 0.62), bootM, sd * 0.3, 0.1, 0.07);
+    add(new THREE.CylinderGeometry(0.17, 0.185, 0.5, 12), jersey, sd * 0.3, 0.44, 0);
+    add(new THREE.CylinderGeometry(0.145, 0.16, 0.85, 12), skin, sd * 0.3, 1.08, 0);
+  });
+  add(new THREE.BoxGeometry(1.34, 0.84, 0.7), shortsM, 0, 1.74, 0);
+  add(new THREE.CylinderGeometry(0.56, 0.69, 1.6, 20), jersey, 0, 2.92, 0);
+  var patch = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.605, 0.675, 0.98, 16, 1, true, -0.64, 1.28),
+    new THREE.MeshBasicMaterial({ map: playerNumberTexture(THREE, data), transparent: true })
+  );
+  patch.position.set(0, 2.95, 0);
+  grp.add(patch);
+  [-1, 1].forEach(function(sd){
+    add(new THREE.SphereGeometry(0.21, 14, 10), jersey, sd * 0.68, 3.58, 0);
+    add(new THREE.CylinderGeometry(0.135, 0.12, 0.56, 10), jersey, sd * 0.79, 3.24, 0, sd * 0.17);
+    add(new THREE.CylinderGeometry(0.11, 0.1, 0.56, 10), skin, sd * 0.88, 2.7, 0, sd * 0.17);
+    add(new THREE.SphereGeometry(0.13, 12, 10), skin, sd * 0.93, 2.38, 0);
+  });
+  add(new THREE.CylinderGeometry(0.17, 0.2, 0.26, 12), skin, 0, 3.84, 0);
+  add(new THREE.SphereGeometry(0.52, 20, 14), skin, 0, 4.38, 0);
+  add(new THREE.SphereGeometry(0.555, 20, 12, 0, Math.PI * 2, 0, 1.3), hairM, 0, 4.42, 0);
+  return grp;
+}
+function buildPlayerCard(THREE, S){
+  if (S.card){ S.holder.remove(S.card); disposeObj(S.card); S.card = null; }
+  var data = S.data;
+  var grp = new THREE.Group();
+  var shape = roundedRectShape(THREE, 6.2, 8.6, 0.5);
+  var geo = new THREE.ExtrudeGeometry(shape, { depth: 0.3, steps: 1, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.04, bevelSegments: 2, curveSegments: 8 });
+  geo.center();
+  var faceMat = new THREE.MeshPhongMaterial({ map: playerFaceTexture(THREE, data), shininess: 26, specular: 0x3A4A5F });
+  var rimCol = new THREE.Color(data.color).multiplyScalar(0.5);
+  var rimMat = new THREE.MeshPhongMaterial({ color: rimCol, shininess: 70, specular: 0x888888 });
+  grp.add(new THREE.Mesh(geo, [faceMat, rimMat]));
+  var backGeo = new THREE.ShapeGeometry(shape, 8);
+  backGeo.rotateY(Math.PI);
+  var back = new THREE.Mesh(backGeo, new THREE.MeshPhongMaterial({ color: 0x131C2C, shininess: 60, specular: 0x8FA3C4 }));
+  back.position.z = -0.21;
+  grp.add(back);
+  var avatar = buildPlayerAvatar(THREE, data);
+  avatar.position.set(0, -3.12, 0.52);
+  grp.add(avatar);
+  S.card = grp;
+  S.holder.add(grp);
+}
+function startPlayer3D(THREE, dlg, head){
+  stopPlayer3D();
+  var panel = head.parentNode;
+  if (!panel) return false;
+  var data = playerRead(head);
+  if (!data) return false;
+  var view = el("div", "mp3d-view mp3d-view-player");
+  view.style.aspectRatio = "10 / 11";
+  view.setAttribute("role", "img");
+  view.setAttribute("aria-label", "Carte 3D en relief de " + data.name + " : avatar en maillot aux couleurs de son club avec le numéro " + data.number + ", note " + data.rating + ", poste " + data.posShort + ", rotative au doigt");
+  panel.insertBefore(view, head);
+  head.style.display = "none";
+  var renderer;
+  try { renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" }); }
+  catch (e) {
+    if (view.parentNode) view.parentNode.removeChild(view);
+    head.style.display = "";
+    return false;
+  }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  view.appendChild(renderer.domElement);
+  var scene = new THREE.Scene();
+  scene.add(new THREE.HemisphereLight(0xf2f7ee, 0x1d3a28, 0.95));
+  var key = new THREE.DirectionalLight(0xffffff, 0.85);
+  key.position.set(6, 9, 11); scene.add(key);
+  var rimL = new THREE.DirectionalLight(0xd8ffd8, 0.5);
+  rimL.position.set(-9, 4, -7); scene.add(rimL);
+  var shadow = new THREE.Mesh(
+    new THREE.PlaneGeometry(8.4, 8.4),
+    new THREE.MeshBasicMaterial({ map: crestShadowTexture(THREE), transparent: true, depthWrite: false })
+  );
+  shadow.rotation.x = -Math.PI / 2; shadow.position.y = -4.9; scene.add(shadow);
+  var holder = new THREE.Group();
+  scene.add(holder);
+  var camera = new THREE.PerspectiveCamera(40, 10 / 11, 0.1, 100);
+  var S = {
+    dlg: dlg, head: head, view: view, renderer: renderer, scene: scene, camera: camera,
+    holder: holder, card: null, shadow: shadow, data: data, sig: data.sig,
+    raf: 0, poll: 0, dead: false, rotY: 0.4, rotX: 0.1, idle: 99, drag: null, dist: 14,
+    clock: new THREE.Clock()
+  };
+  player = S;
+  buildPlayerCard(THREE, S);
+  var cvs = renderer.domElement;
+  cvs.addEventListener("pointerdown", function(e){
+    S.drag = { x: e.clientX, y: e.clientY, rotY: S.rotY, rotX: S.rotX };
+    S.idle = 0;
+    try { cvs.setPointerCapture(e.pointerId); } catch(_){}
+    e.preventDefault();
+  });
+  cvs.addEventListener("pointermove", function(e){
+    if (!S.drag) return;
+    S.idle = 0;
+    S.rotY = S.drag.rotY + (e.clientX - S.drag.x) * 0.011;
+    S.rotX = Math.max(-0.5, Math.min(0.65, S.drag.rotX + (e.clientY - S.drag.y) * 0.006));
+    e.preventDefault();
+  });
+  function endDrag(){ S.drag = null; S.idle = 0; }
+  cvs.addEventListener("pointerup", endDrag);
+  cvs.addEventListener("pointercancel", endDrag);
+  S.poll = setInterval(function(){
+    if (S.dead) return;
+    if (!document.contains(dlg) || !document.contains(view) || !document.contains(head)){ stopPlayer3D(); return; }
+    var nd = playerRead(head);
+    if (nd && nd.sig !== S.sig){
+      S.sig = nd.sig; S.data = nd;
+      view.setAttribute("aria-label", "Carte 3D en relief de " + nd.name + " : avatar en maillot aux couleurs de son club avec le numéro " + nd.number + ", note " + nd.rating + ", poste " + nd.posShort + ", rotative au doigt");
+      try { buildPlayerCard(THREE, S); } catch (e) {}
+    }
+  }, 700);
+  function resize(){
+    var w = view.clientWidth, h = view.clientHeight;
+    if (w > 0 && h > 0){
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+      var vHalf = camera.fov * Math.PI / 360;
+      var hHalf = Math.atan(Math.tan(vHalf) * camera.aspect);
+      S.dist = Math.max(4.95 / Math.tan(vHalf), 3.7 / Math.tan(hHalf)) * 1.06;
+      camera.updateProjectionMatrix();
+    }
+  }
+  S.ro = new ResizeObserver(resize); S.ro.observe(view);
+  resize();
+  function tick(){
+    if (S.dead) return;
+    S.raf = requestAnimationFrame(tick);
+    var dt = Math.min(S.clock.getDelta(), 0.05);
+    var t = S.clock.elapsedTime;
+    S.idle += dt;
+    if (!S.drag && S.idle > 2.5) S.rotY += dt * 0.55;
+    S.holder.rotation.set(S.rotX, S.rotY, 0);
+    S.holder.position.y = Math.sin(t * 1.1) * 0.06;
+    var ss = 1 - Math.sin(t * 1.1) * 0.025;
+    S.shadow.scale.set(ss, ss, 1);
+    camera.position.set(0, 0.3, S.dist);
+    camera.lookAt(0, 0, 0);
+    renderer.render(scene, camera);
+  }
+  tick();
+  return true;
+}
+function stopPlayer3D(){
+  if (!player) return;
+  var S = player; player = null; S.dead = true;
+  cancelAnimationFrame(S.raf); clearInterval(S.poll);
+  if (S.ro) S.ro.disconnect();
+  disposeScene(S.renderer, S.scene);
+  if (S.view && S.view.parentNode) S.view.parentNode.removeChild(S.view);
+  if (S.head && document.contains(S.head)) S.head.style.display = "";
+}
+function attachPlayer(dlg){
+  var panel = dlg.querySelector(".modal-up") || dlg.firstElementChild;
+  if (!panel) return;
+  var head = findPlayerHead(panel);
+  if (!head) return;
+  if (panel.querySelector(".mp3d-bar-player")) return;
+  if (player && player.view && document.contains(player.view)) return;
+  var mode = "2d";
+  var tg = makeToggle(function(m){
+    mode = m;
+    if (m === "3d"){
+      loadThree().then(function(THREE){
+        if (mode !== "3d" || !document.contains(dlg)) return;
+        var ok = false;
+        try { ok = startPlayer3D(THREE, dlg, head); } catch (e) { ok = false; }
+        if (!ok){
+          stopPlayer3D();
+          var v3 = panel.querySelector(".mp3d-view-player");
+          if (v3 && v3.parentNode) v3.parentNode.removeChild(v3);
+          head.style.display = ""; tg.setMode("2d"); mode = "2d";
+        }
+      }).catch(function(){ tg.setMode("2d"); mode = "2d"; });
+    } else stopPlayer3D();
+  });
+  tg.bar.classList.add("mp3d-bar-player");
+  var seg = tg.bar.querySelector('[role="group"]');
+  if (seg) seg.setAttribute("aria-label", "Choisir la vue de la fiche joueur : 2D ou 3D");
+  var btns = tg.bar.querySelectorAll("button");
+  if (btns[0]) btns[0].setAttribute("aria-label", "Vue 2D de la fiche joueur");
+  if (btns[1]) btns[1].setAttribute("aria-label", "Vue 3D de la fiche joueur : carte en relief avec avatar du joueur");
+  panel.insertBefore(tg.bar, head);
+}
+function attachGuidePlayer(dlg){
+  if (dlg.querySelector(".mp3d-guide-player")) return;
+  var list = dlg.querySelector("div.space-y-2\\.5") || dlg.querySelector(".space-y-2\\.5");
+  if (!list){
+    dlg.querySelectorAll("div").forEach(function(d){ if (!list && (d.className || "").indexOf("space-y-2") >= 0) list = d; });
+  }
+  if (!list) return;
+  var sec = el("section", "v2-card mp3d-guide-player", "padding:0;overflow:hidden");
+  sec.setAttribute("aria-label", "La vue 3D — fiche joueur");
+  var btn = el("button", null, "display:flex;width:100%;align-items:center;gap:12px;padding:14px 16px;text-align:left;background:transparent;border:0;color:var(--text);cursor:pointer;font:inherit");
+  btn.setAttribute("aria-expanded", "false");
+  btn.setAttribute("aria-label", "Ouvrir la rubrique La vue 3D — fiche joueur");
+  var ico = el("span", null, "display:flex;height:36px;width:36px;flex:none;align-items:center;justify-content:center;border-radius:10px;background:var(--surface2);font-size:12px;font-weight:900;color:var(--gold)");
+  ico.textContent = "3D";
+  var ttl = el("span", null, "flex:1;min-width:0;font-size:17px;font-weight:800;text-transform:uppercase;letter-spacing:.4px");
+  ttl.textContent = "La vue 3D — fiche joueur";
+  var chev = el("span", null, "color:var(--dim);font-size:20px;font-weight:700;transition:transform .2s");
+  chev.textContent = "›";
+  btn.appendChild(ico); btn.appendChild(ttl); btn.appendChild(chev);
+  var body = el("div", null, "border-top:1px solid var(--border);padding:12px 16px");
+  body.hidden = true;
+  var paras = [
+    "Phase 5 de la 3D : la fiche d'un joueur peut elle aussi passer en 3D, avec l'interrupteur « Vue 2D / Vue 3D » placé au-dessus de la carte du joueur, quel que soit l'écran d'où la fiche est ouverte (Effectif, marché des transferts, recherche…). La vue 2D reste la vue par défaut et la fiche 2D ne change pas : le reste de la fiche (âge, nationalité, moral, forme, valeur, contrat, statistiques et actions sur le joueur) reste affiché sous la carte, exactement comme avant.",
+    "En vue 3D, la carte du joueur devient une carte en relief, légèrement inclinée en perspective : un avatar stylisé du joueur en maillot aux couleurs de son club, avec son numéro sur le maillot, et le nom, la note et le poste affichés sur la carte. La carte tourne lentement sur elle-même ; fais-la pivoter du doigt pour la voir sous tous les angles, elle reprend sa rotation automatique après quelques secondes sans toucher.",
+    "Pour les joueurs de ton effectif, la couleur du maillot et le numéro sont ceux affichés dans l'Effectif. Quand tu passes d'un joueur à l'autre, la carte 3D se met à jour avec le joueur affiché : nom, note, poste, couleurs et numéro suivent la fiche ouverte.",
+    "Technique : même moteur 3D que le direct, la tactique, le stade et l'écusson (Three.js), chargé uniquement à la première ouverture d'une vue 3D. L'avatar est une silhouette générée par le jeu, sans aucun fichier externe ni photo réelle. Sans connexion lors du tout premier chargement, la vue 2D reste affichée."
+  ];
+  paras.forEach(function(t, i){
+    var p = el("p", null, "margin:" + (i ? "8px" : "0") + " 0 0;font-size:14px;line-height:1.55;color:var(--dim)");
+    p.textContent = t; body.appendChild(p);
+  });
+  btn.addEventListener("click", function(){
+    var open = body.hidden;
+    body.hidden = !open;
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    btn.setAttribute("aria-label", (open ? "Replier" : "Ouvrir") + " la rubrique La vue 3D — fiche joueur");
+    chev.style.transform = open ? "rotate(90deg)" : "";
+  });
+  sec.appendChild(btn); sec.appendChild(body);
+  list.appendChild(sec);
+}
+
 /* ================= GUIDE (Fonctionnement du jeu) ================= */
 function attachGuide(dlg){
-  if (dlg.querySelector(".mp3d-guide")) { attachGuideInfra(dlg); attachGuideCrest(dlg); return; }
+  if (dlg.querySelector(".mp3d-guide")) { attachGuideInfra(dlg); attachGuideCrest(dlg); attachGuidePlayer(dlg); return; }
   var list = dlg.querySelector("div.space-y-2\\.5") || dlg.querySelector(".space-y-2\\.5");
   if (!list){
     dlg.querySelectorAll("div").forEach(function(d){ if (!list && (d.className || "").indexOf("space-y-2") >= 0) list = d; });
@@ -1702,6 +2095,7 @@ function attachGuide(dlg){
   list.appendChild(sec);
   attachGuideInfra(dlg);
   attachGuideCrest(dlg);
+  attachGuidePlayer(dlg);
 }
 
 /* ================= OBSERVATEUR ================= */
@@ -1720,6 +2114,9 @@ function scan(){
   var cgrid = document.querySelector("div[aria-label=\"Aperçu en direct de l'écusson personnalisé\"]");
   if (cgrid) attachCrest(cgrid);
   else if (crest && crest.view && !document.contains(crest.view)) stopCrest3D();
+  var pdlg = document.querySelector('div[role="dialog"][aria-label="Fiche joueur"]');
+  if (pdlg) attachPlayer(pdlg);
+  else if (player && player.view && !document.contains(player.view)) stopPlayer3D();
   var dlg = document.querySelector('div[role="dialog"][aria-label="Fonctionnement du jeu"]');
   if (dlg) attachGuide(dlg);
 }
