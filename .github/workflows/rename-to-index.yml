@@ -1,0 +1,22 @@
+name: Restore and rename build file to index.html
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  rename:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Restore build file and rename to index.html
+        run: |
+          set -e
+          git config user.name "barrymlamine35"
+          git config user.email "barrymlamine35@users.noreply.github.com"
+          git checkout 47d677e -- football-manager-mode-carri-re-version-locale.html
+          git rm -q index.html
+          git mv football-manager-mode-carri-re-version-locale.html index.html
+          git commit -m "Écusson 3D + AVANCER à 1,5 seconde par jour"
+          git push
