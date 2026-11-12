@@ -232,6 +232,14 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
 .mp3d-view-player{background:radial-gradient(130% 105% at 50% 0%,#173D27 0%,#0A1F13 72%)}
 .mp3d-view-player canvas{cursor:grab}
 .mp3d-view-player canvas:active{cursor:grabbing}
+.mp3d-view-trophy{background:radial-gradient(120% 100% at 50% 0%,#3A2C07 0%,#171106 55%,#0B0903 100%)}
+.mp3d-view-trophy canvas{cursor:grab}
+.mp3d-view-trophy canvas:active{cursor:grabbing}
+.mp3d-trophy-cap{position:absolute;left:0;right:0;bottom:0;z-index:5;padding:30px 14px 12px;text-align:center;pointer-events:none;background:linear-gradient(180deg,transparent,rgba(5,4,1,.8))}
+.mp3d-trophy-cap b{display:block;font-size:19px;font-weight:900;letter-spacing:.4px;color:#F5C86B;text-transform:uppercase;line-height:1.15}
+.mp3d-trophy-cap span{display:block;margin-top:2px;font-size:13px;font-weight:700;color:rgba(255,255,255,.88)}
+.mp3d-mini{position:relative;width:100%;height:118px;margin:0 0 14px;overflow:hidden;border-radius:16px;border:1px solid var(--border);background:#0C1320;box-shadow:0 4px 14px rgba(0,0,0,.35)}
+.mp3d-mini canvas{display:block;width:100%;height:100%}
 </style>
 <script>
 (function(){
@@ -2052,9 +2060,424 @@ function attachGuidePlayer(dlg){
   list.appendChild(sec);
 }
 
+/* ================= TROPHÉE 3D + MINI STADE ACCUEIL (Phase 6) ================= */
+var trophy = null;
+var homeMini = null;
+var infraCache = null;
+function trophyParseTitle(title, bodyText, clubName){
+  if (!title) return null;
+  var t = title.replace(/\s+/g, " ").trim();
+  var mine = !clubName || t.indexOf(clubName) === 0 || /TON CLUB REMPORTE/i.test(t);
+  if (!mine) return null;
+  var m = t.match(/champion de (.+?)\s*!*$/i);
+  if (m) return { kind: "league", name: "Champion de " + m[1].trim() };
+  m = t.match(/remporte (?:la|le|les|l['’])\s*(.+?)\s*!*$/i);
+  if (m){
+    var nm = m[1].trim();
+    if (bodyText){
+      var bm = bodyText.match(/soulève (?:la|le|les|l['’])\s*([^!.,]+)/i);
+      if (bm && bm[1].trim().length > 2) nm = bm[1].replace(/\s+au terme.*$/i, "").replace(/\s+à l'issue.*$/i, "").trim();
+    }
+    if (nm.length > 2) return { kind: "cup", name: nm };
+  }
+  if (/sur le toit du monde/i.test(t)){
+    var nm2 = "Coupe du Monde des Clubs";
+    if (bodyText){
+      var bm2 = bodyText.match(/remporte (?:la|le|les|l['’])\s*([^,]+),/i);
+      if (bm2 && bm2[1].trim().length > 2) nm2 = bm2[1].trim();
+    }
+    return { kind: "cup", name: nm2 };
+  }
+  return null;
+}
+function trophySeason(anchor){
+  var txt = anchor ? (anchor.textContent || "") : "";
+  var m = txt.match(/[Ss]aison\s+(\d{4})/);
+  if (m) return m[1];
+  var dlg = anchor && anchor.closest ? anchor.closest('[role="dialog"]') : null;
+  if (dlg){ var m2 = (dlg.textContent || "").match(/[Ss]aison\s+(\d{4})/); if (m2) return m2[1]; }
+  var body = document.body ? (document.body.textContent || "") : "";
+  var m3 = body.match(/Saison\s+(\d{4})\s+terminée/);
+  if (m3) return m3[1];
+  var m4 = body.match(/fin de saison\s+(\d{4})/);
+  if (m4) return m4[1];
+  var banner = document.querySelector('div[role="status"][aria-label^="Date du jour"]');
+  if (banner){ var m5 = (banner.getAttribute("aria-label") || "").match(/(\d{4})/); if (m5) return m5[1]; }
+  return "";
+}
+function goldMat(THREE, dark){
+  return new THREE.MeshPhongMaterial({ color: dark ? 0xA87F14 : 0xD9A91F, shininess: 95, specular: 0xFFE9A8, emissive: 0x2A1D00 });
+}
+function buildCup3D(THREE){
+  var grp = new THREE.Group();
+  var gold = goldMat(THREE, false), goldD = goldMat(THREE, true);
+  var plinth = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 1.95, 0.5, 36), new THREE.MeshPhongMaterial({ color: 0x241A10, shininess: 22, specular: 0x665533 }));
+  plinth.position.y = 0.25; grp.add(plinth);
+  var trim = new THREE.Mesh(new THREE.TorusGeometry(1.83, 0.045, 8, 44), gold);
+  trim.rotation.x = Math.PI / 2; trim.position.y = 0.48; grp.add(trim);
+  var plaque = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.3, 0.06), gold);
+  plaque.position.set(0, 0.25, 1.87); grp.add(plaque);
+  var cup = new THREE.Group(); cup.position.y = 0.5; grp.add(cup);
+  var prof = [[0.001, 0], [1.45, 0], [1.5, 0.1], [1.5, 0.22], [0.72, 0.32], [0.46, 0.5], [0.4, 0.95], [0.52, 1.2], [0.95, 1.5], [1.35, 1.95], [1.58, 2.55], [1.66, 3.05], [1.72, 3.18]];
+  var pts = prof.map(function(p){ return new THREE.Vector2(p[0], p[1]); });
+  cup.add(new THREE.Mesh(new THREE.LatheGeometry(pts, 42), gold));
+  var topDisc = new THREE.Mesh(new THREE.CircleGeometry(1.6, 36), goldD);
+  topDisc.rotation.x = -Math.PI / 2; topDisc.position.y = 3.08; cup.add(topDisc);
+  var rim = new THREE.Mesh(new THREE.TorusGeometry(1.7, 0.075, 10, 44), gold);
+  rim.rotation.x = Math.PI / 2; rim.position.y = 3.18; cup.add(rim);
+  [1, -1].forEach(function(sd){
+    var h = new THREE.Mesh(new THREE.TorusGeometry(0.72, 0.1, 10, 26, Math.PI), gold);
+    h.position.set(sd * 1.6, 2.35, 0);
+    h.rotation.z = sd > 0 ? -Math.PI / 2 : Math.PI / 2;
+    cup.add(h);
+  });
+  return grp;
+}
+function buildPlate3D(THREE){
+  var grp = new THREE.Group();
+  var gold = goldMat(THREE, false), goldD = goldMat(THREE, true);
+  var plinth = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.25, 0.42, 32), new THREE.MeshPhongMaterial({ color: 0x241A10, shininess: 22, specular: 0x665533 }));
+  plinth.position.y = 0.21; grp.add(plinth);
+  var stem = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.2, 1.15, 12), goldD);
+  stem.position.y = 0.95; grp.add(stem);
+  var plate = new THREE.Group();
+  plate.position.y = 1.62; plate.rotation.x = -0.55;
+  var prof = [[0.001, 0], [1.1, 0.03], [2.0, 0.12], [2.7, 0.32], [3.0, 0.55], [3.08, 0.68]];
+  var pts = prof.map(function(p){ return new THREE.Vector2(p[0], p[1]); });
+  plate.add(new THREE.Mesh(new THREE.LatheGeometry(pts, 48), gold));
+  var rim = new THREE.Mesh(new THREE.TorusGeometry(3.02, 0.075, 10, 52), gold);
+  rim.rotation.x = Math.PI / 2; rim.position.y = 0.66; plate.add(rim);
+  [[1.3, 0.055], [2.1, 0.135]].forEach(function(r){
+    var ring = new THREE.Mesh(new THREE.TorusGeometry(r[0], 0.028, 6, 44), goldD);
+    ring.rotation.x = Math.PI / 2; ring.position.y = r[1]; plate.add(ring);
+  });
+  var dome = new THREE.Mesh(new THREE.SphereGeometry(0.62, 24, 14), goldD);
+  dome.scale.set(1, 0.38, 1); dome.position.y = 0.05; plate.add(dome);
+  grp.add(plate);
+  return grp;
+}
+function makeConfetti3D(THREE, n){
+  var grp = new THREE.Group();
+  var geo = new THREE.PlaneGeometry(0.16, 0.26);
+  var mats = [0xF5C86B, 0xD9A91F, 0xFFF3C4, 0xC9A227].map(function(c){ return new THREE.MeshBasicMaterial({ color: c, side: THREE.DoubleSide }); });
+  var parts = [];
+  for (var i = 0; i < n; i++){
+    var m = new THREE.Mesh(geo, mats[i % mats.length]);
+    m.position.set((Math.random() - 0.5) * 11, Math.random() * 7.5 - 2.2, (Math.random() - 0.5) * 5);
+    m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+    grp.add(m);
+    parts.push({ m: m, vy: 0.5 + Math.random() * 0.9, rx: (Math.random() - 0.5) * 3.4, rz: (Math.random() - 0.5) * 3.4, sw: Math.random() * 6.28 });
+  }
+  return { grp: grp, parts: parts };
+}
+function startTrophy3D(THREE, anchor, data){
+  stopTrophy3D();
+  var parent = anchor.parentNode;
+  if (!parent) return false;
+  var view = el("div", "mp3d-view mp3d-view-trophy");
+  view.style.aspectRatio = "4 / 3";
+  view.setAttribute("role", "img");
+  view.setAttribute("aria-label", "Trophée 3D doré animé : " + data.name + (data.season ? ", saison " + data.season : "") + ", en rotation lente avec confettis dorés, rotatif au doigt");
+  var cap = el("div", "mp3d-trophy-cap");
+  var capB = el("b"); capB.textContent = data.name; cap.appendChild(capB);
+  if (data.season){ var capS = el("span"); capS.textContent = "Saison " + data.season; cap.appendChild(capS); }
+  view.appendChild(cap);
+  view.addEventListener("click", function(e){ e.stopPropagation(); });
+  parent.insertBefore(view, anchor);
+  anchor.style.display = "none";
+  var renderer;
+  try { renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" }); }
+  catch (e) {
+    if (view.parentNode) view.parentNode.removeChild(view);
+    anchor.style.display = "";
+    return false;
+  }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  view.appendChild(renderer.domElement);
+  var scene = new THREE.Scene();
+  scene.add(new THREE.HemisphereLight(0xfff2d0, 0x241a05, 0.9));
+  var key = new THREE.DirectionalLight(0xffffff, 0.9);
+  key.position.set(5, 8, 7); scene.add(key);
+  var rimL = new THREE.DirectionalLight(0xffe9a8, 0.6);
+  rimL.position.set(-6, 3, -6); scene.add(rimL);
+  var orbit = new THREE.PointLight(0xffc95e, 0.9, 40);
+  scene.add(orbit);
+  var glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(THREE), color: 0xFFD9A0, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending }));
+  glow.scale.set(11, 11, 1); glow.position.set(0, 0.4, -2.5); scene.add(glow);
+  var H = data.kind === "league" ? 3.95 : 3.85;
+  var shadow = new THREE.Mesh(
+    new THREE.PlaneGeometry(8.6, 8.6),
+    new THREE.MeshBasicMaterial({ map: crestShadowTexture(THREE), transparent: true, depthWrite: false })
+  );
+  shadow.rotation.x = -Math.PI / 2; shadow.position.y = -H / 2 - 0.02; scene.add(shadow);
+  var holder = new THREE.Group();
+  var model = data.kind === "league" ? buildPlate3D(THREE) : buildCup3D(THREE);
+  model.position.y = -H / 2;
+  holder.add(model);
+  scene.add(holder);
+  var confetti = makeConfetti3D(THREE, 130);
+  scene.add(confetti.grp);
+  var camera = new THREE.PerspectiveCamera(40, 4 / 3, 0.1, 100);
+  var S = {
+    anchor: anchor, view: view, renderer: renderer, scene: scene, camera: camera,
+    holder: holder, orbit: orbit, confetti: confetti, shadow: shadow, data: data,
+    raf: 0, poll: 0, dead: false, rotY: 0.45, rotX: 0.1, idle: 99, drag: null, dist: 11,
+    clock: new THREE.Clock()
+  };
+  trophy = S;
+  var cvs = renderer.domElement;
+  cvs.addEventListener("pointerdown", function(e){
+    S.drag = { x: e.clientX, y: e.clientY, rotY: S.rotY, rotX: S.rotX };
+    S.idle = 0;
+    try { cvs.setPointerCapture(e.pointerId); } catch(_){}
+    e.preventDefault();
+  });
+  cvs.addEventListener("pointermove", function(e){
+    if (!S.drag) return;
+    S.idle = 0;
+    S.rotY = S.drag.rotY + (e.clientX - S.drag.x) * 0.011;
+    S.rotX = Math.max(-0.3, Math.min(0.5, S.drag.rotX + (e.clientY - S.drag.y) * 0.005));
+    e.preventDefault();
+  });
+  function endDrag(){ S.drag = null; S.idle = 0; }
+  cvs.addEventListener("pointerup", endDrag);
+  cvs.addEventListener("pointercancel", endDrag);
+  S.poll = setInterval(function(){
+    if (S.dead) return;
+    if (!document.contains(anchor) || !document.contains(view)){ stopTrophy3D(); return; }
+  }, 700);
+  function resize(){
+    var w = view.clientWidth, h = view.clientHeight;
+    if (w > 0 && h > 0){
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+      var vHalf = camera.fov * Math.PI / 360;
+      var hHalf = Math.atan(Math.tan(vHalf) * camera.aspect);
+      var halfW = data.kind === "league" ? 3.35 : 2.6;
+      S.dist = Math.max((H / 2 + 0.55) / Math.tan(vHalf), halfW / Math.tan(hHalf)) * 1.1;
+      camera.updateProjectionMatrix();
+    }
+  }
+  S.ro = new ResizeObserver(resize); S.ro.observe(view);
+  resize();
+  function tick(){
+    if (S.dead) return;
+    S.raf = requestAnimationFrame(tick);
+    var dt = Math.min(S.clock.getDelta(), 0.05);
+    var t = S.clock.elapsedTime;
+    S.idle += dt;
+    if (!S.drag && S.idle > 2.5) S.rotY += dt * 0.5;
+    S.holder.rotation.set(S.rotX, S.rotY, 0);
+    S.holder.position.y = Math.sin(t * 1.05) * 0.05;
+    S.orbit.position.set(Math.cos(t * 0.7) * 6.5, 3.2 + Math.sin(t * 0.9) * 0.8, Math.sin(t * 0.7) * 6.5);
+    S.confetti.parts.forEach(function(p){
+      p.m.position.y -= p.vy * dt;
+      p.m.position.x += Math.sin(t * 2 + p.sw) * dt * 0.35;
+      p.m.rotation.x += p.rx * dt;
+      p.m.rotation.z += p.rz * dt;
+      if (p.m.position.y < -2.4){ p.m.position.y = 5.2; p.m.position.x = (Math.random() - 0.5) * 11; }
+    });
+    var ss = 1 - Math.sin(t * 1.05) * 0.025;
+    S.shadow.scale.set(ss, ss, 1);
+    camera.position.set(0, 0.25, S.dist);
+    camera.lookAt(0, 0, 0);
+    renderer.render(scene, camera);
+  }
+  tick();
+  return true;
+}
+function stopTrophy3D(){
+  if (!trophy) return;
+  var S = trophy; trophy = null; S.dead = true;
+  cancelAnimationFrame(S.raf); clearInterval(S.poll);
+  if (S.ro) S.ro.disconnect();
+  disposeScene(S.renderer, S.scene);
+  if (S.view && S.view.parentNode) S.view.parentNode.removeChild(S.view);
+  if (S.anchor && document.contains(S.anchor)) S.anchor.style.display = "";
+}
+function attachTrophy(anchor, data){
+  var parent = anchor.parentNode;
+  if (!parent) return;
+  if (parent.querySelector(".mp3d-bar-trophy")) return;
+  if (trophy && trophy.view && document.contains(trophy.view)) return;
+  if (!data.season) data.season = trophySeason(anchor);
+  data.sig = data.kind + "|" + data.name + "|" + data.season;
+  var mode = "2d";
+  var tg = makeToggle(function(m){
+    mode = m;
+    if (m === "3d"){
+      loadThree().then(function(THREE){
+        if (mode !== "3d" || !document.contains(anchor)) return;
+        var ok = false;
+        try { ok = startTrophy3D(THREE, anchor, data); } catch (e) { ok = false; }
+        if (!ok){
+          stopTrophy3D();
+          var v3 = parent.querySelector(".mp3d-view-trophy");
+          if (v3 && v3.parentNode) v3.parentNode.removeChild(v3);
+          anchor.style.display = ""; tg.setMode("2d"); mode = "2d";
+        }
+      }).catch(function(){ tg.setMode("2d"); mode = "2d"; });
+    } else stopTrophy3D();
+  });
+  tg.bar.classList.add("mp3d-bar-trophy");
+  tg.bar.style.marginBottom = "10px";
+  tg.bar.addEventListener("click", function(e){ e.stopPropagation(); });
+  var seg = tg.bar.querySelector('[role="group"]');
+  if (seg) seg.setAttribute("aria-label", "Choisir la vue de la célébration : 2D ou 3D");
+  var btns = tg.bar.querySelectorAll("button");
+  if (btns[0]) btns[0].setAttribute("aria-label", "Vue 2D de la célébration");
+  if (btns[1]) btns[1].setAttribute("aria-label", "Vue 3D de la célébration : trophée doré animé avec confettis");
+  parent.insertBefore(tg.bar, anchor);
+}
+function attachGuideTrophy(dlg){
+  if (dlg.querySelector(".mp3d-guide-trophy")) return;
+  var list = dlg.querySelector("div.space-y-2\\.5") || dlg.querySelector(".space-y-2\\.5");
+  if (!list){
+    dlg.querySelectorAll("div").forEach(function(d){ if (!list && (d.className || "").indexOf("space-y-2") >= 0) list = d; });
+  }
+  if (!list) return;
+  var sec = el("section", "v2-card mp3d-guide-trophy", "padding:0;overflow:hidden");
+  sec.setAttribute("aria-label", "La vue 3D — trophée");
+  var btn = el("button", null, "display:flex;width:100%;align-items:center;gap:12px;padding:14px 16px;text-align:left;background:transparent;border:0;color:var(--text);cursor:pointer;font:inherit");
+  btn.setAttribute("aria-expanded", "false");
+  btn.setAttribute("aria-label", "Ouvrir la rubrique La vue 3D — trophée");
+  var ico = el("span", null, "display:flex;height:36px;width:36px;flex:none;align-items:center;justify-content:center;border-radius:10px;background:var(--surface2);font-size:12px;font-weight:900;color:var(--gold)");
+  ico.textContent = "3D";
+  var ttl = el("span", null, "flex:1;min-width:0;font-size:17px;font-weight:800;text-transform:uppercase;letter-spacing:.4px");
+  ttl.textContent = "La vue 3D — trophée";
+  var chev = el("span", null, "color:var(--dim);font-size:20px;font-weight:700;transition:transform .2s");
+  chev.textContent = "›";
+  btn.appendChild(ico); btn.appendChild(ttl); btn.appendChild(chev);
+  var body = el("div", null, "border-top:1px solid var(--border);padding:12px 16px");
+  body.hidden = true;
+  var paras = [
+    "Phase 6 de la 3D : quand ton club remporte un titre — championnat, coupe nationale, compétition européenne ou tout autre trophée — la scène de célébration peut passer en 3D, avec l'interrupteur « Vue 2D / Vue 3D » placé au-dessus. La célébration s'affiche dans la une de presse ou l'alerte qui annonce le titre, et le même interrupteur apparaît quand tu rouvres ce message depuis l'Inbox. La vue 2D reste la vue par défaut et la célébration 2D ne change pas.",
+    "En vue 3D, le trophée remporté trône en relief : un trophée doré qui tourne lentement, avec des reflets qui glissent sur le métal et une pluie de confettis dorés. Le nom du titre et la saison sont affichés sous le trophée. Fais-le pivoter du doigt pour l'admirer sous tous les angles ; il reprend sa rotation automatique après quelques secondes sans toucher.",
+    "Le trophée correspond au titre remporté : un championnat affiche le grand plateau doré du champion, tandis qu'une coupe — nationale, européenne ou mondiale — affiche la coupe dorée à deux anses, posée sur son socle.",
+    "Sur l'Accueil, une petite miniature 3D de ton stade tourne lentement en haut de l'écran, dans le bloc du club : c'est la même maquette que celle de la vue 3D des infrastructures (Club > Infrastructures), en petit format, au niveau de stade connu du jeu — passe par l'écran Infrastructures pour la mettre à jour au dernier niveau.",
+    "Technique : même moteur 3D que le direct, la tactique, le stade, l'écusson et la fiche joueur (Three.js), chargé uniquement à la première ouverture d'une vue 3D. Le trophée et la miniature du stade sont des formes générées par le jeu, sans aucun fichier externe. Sans connexion lors du tout premier chargement, la vue 2D reste affichée."
+  ];
+  paras.forEach(function(t, i){
+    var p = el("p", null, "margin:" + (i ? "8px" : "0") + " 0 0;font-size:14px;line-height:1.55;color:var(--dim)");
+    p.textContent = t; body.appendChild(p);
+  });
+  btn.addEventListener("click", function(){
+    var open = body.hidden;
+    body.hidden = !open;
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    btn.setAttribute("aria-label", (open ? "Replier" : "Ouvrir") + " la rubrique La vue 3D — trophée");
+    chev.style.transform = open ? "rotate(90deg)" : "";
+  });
+  sec.appendChild(btn); sec.appendChild(body);
+  list.appendChild(sec);
+}
+
+/* ================= MINI STADE 3D (Accueil) ================= */
+function startHomeMini(THREE, wrap){
+  stopHomeMini();
+  var d = infraCache || { stadium: 3, newStadium: false, color: infraClubColor() };
+  var lvl = d.stadium || 3;
+  var renderer;
+  try { renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" }); }
+  catch (e) { return false; }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  wrap.appendChild(renderer.domElement);
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0C1320);
+  scene.add(new THREE.HemisphereLight(0xdfeaf5, 0x1a2432, 0.95));
+  var sun = new THREE.DirectionalLight(0xffffff, 0.7);
+  sun.position.set(40, 80, 30); scene.add(sun);
+  var camera = new THREE.PerspectiveCamera(42, 3, 0.1, 900);
+  var S = {
+    wrap: wrap, renderer: renderer, scene: scene, camera: camera,
+    model: null, glows: [], sig: "", raf: 0, poll: 0, dead: false, az: 0.7, dist: 120,
+    clock: new THREE.Clock()
+  };
+  homeMini = S;
+  function build(){
+    if (S.model){ S.scene.remove(S.model); disposeObj(S.model); S.model = null; }
+    var dd = infraCache || { stadium: 3, newStadium: false, color: infraClubColor() };
+    var st = buildStadium3D(THREE, dd.stadium || 3, dd.color || infraClubColor(), !!dd.newStadium, infraInitials());
+    S.model = st.grp; S.glows = st.glows;
+    S.scene.add(st.grp);
+    S.sig = (dd.stadium || 3) + "|" + (dd.newStadium ? 1 : 0) + "|" + (dd.color || "");
+  }
+  build();
+  S.poll = setInterval(function(){
+    if (S.dead) return;
+    if (!document.contains(wrap)){ stopHomeMini(); return; }
+    var dd = infraCache;
+    if (dd){
+      var ns = (dd.stadium || 3) + "|" + (dd.newStadium ? 1 : 0) + "|" + (dd.color || "");
+      if (ns !== S.sig){ try { build(); } catch (e) {} }
+    }
+  }, 1200);
+  function resize(){
+    var w = wrap.clientWidth, h = wrap.clientHeight;
+    if (w > 0 && h > 0){
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+      var vHalf = camera.fov * Math.PI / 360;
+      var hHalf = Math.atan(Math.tan(vHalf) * camera.aspect);
+      S.dist = Math.max(50 / Math.tan(hHalf), 30 / Math.tan(vHalf)) * 1.06;
+      camera.updateProjectionMatrix();
+    }
+  }
+  S.ro = new ResizeObserver(resize); S.ro.observe(wrap);
+  resize();
+  function tick(){
+    if (S.dead) return;
+    S.raf = requestAnimationFrame(tick);
+    var dt = Math.min(S.clock.getDelta(), 0.05);
+    var t = S.clock.elapsedTime;
+    S.az += dt * 0.1;
+    var elv = 0.62, ce = Math.cos(elv), se = Math.sin(elv);
+    camera.position.set(Math.sin(S.az) * ce * S.dist, se * S.dist + 2, Math.cos(S.az) * ce * S.dist);
+    camera.lookAt(0, 1, 0);
+    if (S.glows) S.glows.forEach(function(gl, i){ gl.material.opacity = 0.46 + 0.1 * Math.sin(t * 2 + i * 1.3); });
+    renderer.render(scene, camera);
+  }
+  tick();
+  return true;
+}
+function stopHomeMini(){
+  if (!homeMini) return;
+  var S = homeMini; homeMini = null; S.dead = true;
+  cancelAnimationFrame(S.raf); clearInterval(S.poll);
+  if (S.ro) S.ro.disconnect();
+  disposeScene(S.renderer, S.scene);
+}
+function attachHomeMini(banner){
+  var container = banner.parentNode;
+  if (!container) return;
+  if (container.querySelector(".mp3d-mini")) return;
+  if (homeMini && homeMini.wrap && document.contains(homeMini.wrap)) return;
+  var wrap = el("div", "mp3d-mini");
+  wrap.setAttribute("role", "img");
+  wrap.setAttribute("aria-label", "Miniature 3D du stade du club, en rotation lente : la même maquette que la vue 3D des infrastructures, en petit format");
+  container.insertBefore(wrap, banner.nextSibling);
+  var started = false;
+  function tryStart(){
+    if (started || !document.contains(wrap)) return;
+    started = true;
+    loadThree().then(function(THREE){
+      if (!document.contains(wrap)) return;
+      var ok = false;
+      try { ok = startHomeMini(THREE, wrap); } catch (e) { ok = false; }
+      if (!ok){ stopHomeMini(); if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }
+    }).catch(function(){ if (wrap.parentNode) wrap.parentNode.removeChild(wrap); });
+  }
+  if ("IntersectionObserver" in window){
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){ if (en.isIntersecting){ io.disconnect(); tryStart(); } });
+    }, { rootMargin: "200px" });
+    io.observe(wrap);
+  } else tryStart();
+}
+
 /* ================= GUIDE (Fonctionnement du jeu) ================= */
 function attachGuide(dlg){
-  if (dlg.querySelector(".mp3d-guide")) { attachGuideInfra(dlg); attachGuideCrest(dlg); attachGuidePlayer(dlg); return; }
+  if (dlg.querySelector(".mp3d-guide")) { attachGuideInfra(dlg); attachGuideCrest(dlg); attachGuidePlayer(dlg); attachGuideTrophy(dlg); return; }
   var list = dlg.querySelector("div.space-y-2\\.5") || dlg.querySelector(".space-y-2\\.5");
   if (!list){
     dlg.querySelectorAll("div").forEach(function(d){ if (!list && (d.className || "").indexOf("space-y-2") >= 0) list = d; });
@@ -2096,6 +2519,7 @@ function attachGuide(dlg){
   attachGuideInfra(dlg);
   attachGuideCrest(dlg);
   attachGuidePlayer(dlg);
+  attachGuideTrophy(dlg);
 }
 
 /* ================= OBSERVATEUR ================= */
@@ -2109,8 +2533,46 @@ function scan(){
   if (sec) attachTac(sec);
   else if (tac && tac.view && !document.contains(tac.view)) stopTac3D();
   var car = document.querySelector('div[aria-label="Carrousel des installations"]');
-  if (car) attachInfra(car);
+  if (car){
+    attachInfra(car);
+    try { var idata = infraRead(car); idata.color = infraClubColor(); infraCache = idata; } catch (e) {}
+  }
   else if (infra && infra.view && !document.contains(infra.view)) stopInfra3D();
+  var tart = null, tdata = null;
+  document.querySelectorAll('article[aria-label^="Une du journal Sport Quotidien : "]').forEach(function(a){
+    if (tart) return;
+    var atxt = a.textContent || "";
+    var cm = atxt.match(/Toute l'actualité de (.+?) en une/);
+    var title = (a.getAttribute("aria-label") || "").slice("Une du journal Sport Quotidien : ".length);
+    var d = trophyParseTitle(title, atxt, cm ? cm[1].trim() : "");
+    if (d){ tart = a; tdata = d; }
+  });
+  if (!tart){
+    var adlg = document.querySelector('div[role="dialog"][aria-label^="Alerte importante : "]');
+    if (adlg){
+      var atitle = (adlg.getAttribute("aria-label") || "").slice("Alerte importante : ".length);
+      var ad = trophyParseTitle(atitle, adlg.textContent || "", "");
+      var acard = adlg.querySelector(".v2-card");
+      if (ad && acard){ tart = acard; tdata = ad; }
+    }
+  }
+  if (!tart){
+    document.querySelectorAll('article[aria-label^="Message de "]').forEach(function(a){
+      if (tart) return;
+      var ps = a.querySelectorAll("p");
+      for (var i = 0; i < ps.length; i++){
+        var ptxt = (ps[i].textContent || "").trim();
+        if (ptxt.length > 140) continue;
+        var d2 = trophyParseTitle(ptxt, a.textContent || "", "");
+        if (d2){ tart = a; tdata = d2; break; }
+      }
+    });
+  }
+  if (tart) attachTrophy(tart, tdata);
+  else if (trophy && trophy.view && !document.contains(trophy.view)) stopTrophy3D();
+  var hbanner = document.querySelector('div[role="status"][aria-label^="Date du jour"]');
+  if (hbanner) attachHomeMini(hbanner);
+  else if (homeMini && homeMini.wrap && !document.contains(homeMini.wrap)) stopHomeMini();
   var cgrid = document.querySelector("div[aria-label=\"Aperçu en direct de l'écusson personnalisé\"]");
   if (cgrid) attachCrest(cgrid);
   else if (crest && crest.view && !document.contains(crest.view)) stopCrest3D();
