@@ -3125,5 +3125,645 @@ queueScan();
 })();
 </script>
 
+<style id="mpaudio-style">
+.mpaudio-mute{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);right:10px;z-index:200000;width:42px;height:42px;border-radius:9999px;display:flex;align-items:center;justify-content:center;background:rgba(13,18,28,.85);border:1px solid var(--border,#2A3242);color:var(--gold,#F5B301);cursor:pointer;padding:0;-webkit-tap-highlight-color:transparent}
+.mpaudio-mute svg{width:22px;height:22px;display:block}
+.mpaudio-mute[aria-pressed="true"]{color:#8A94A6}
+.mpaudio-settings input[type="range"]{accent-color:var(--accent,#10D38A);height:28px;cursor:pointer}
+.mpaudio-hic{display:inline-flex;width:24px;height:24px;color:var(--accent,#10D38A)}
+.mpaudio-hic svg{width:24px;height:24px}
+</style>
+<script>
+(function(){
+"use strict";
+/* Manager Pro 27 — sons et musique.
+   Tous les sons sont générés en direct par Web Audio API (aucun fichier audio,
+   aucun téléchargement) : musique calme des menus, ambiance de stade pendant
+   le direct, clameur sur les buts du club du joueur, grognement sur les buts
+   adverses, montée de foule sur les occasions, sifflets (coup d'envoi,
+   mi-temps, fin de match, cartons) et clic discret sur les boutons.
+   Le son ne démarre qu'après un premier geste de l'utilisateur (règle des
+   navigateurs). Choix (muet + volume) mémorisés dans localStorage. */
+
+/* ---------------- Réglages persistés ---------------- */
+var LS_KEY = "mp27.audio.v1";
+var settings = { muted: false, volume: 0.8 };
+try {
+  var rawSaved = localStorage.getItem(LS_KEY);
+  if (rawSaved){
+    var parsed = JSON.parse(rawSaved);
+    if (parsed){
+      if (typeof parsed.muted === "boolean") settings.muted = parsed.muted;
+      if (typeof parsed.volume === "number" && isFinite(parsed.volume)) settings.volume = Math.min(1, Math.max(0, parsed.volume));
+    }
+  } else if (localStorage.getItem("fm-sound") === "off"){
+    settings.muted = true; /* reprend le réglage historique du direct */
+  }
+} catch (e) {}
+function saveSettings(){
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(settings));
+    localStorage.setItem("fm-sound", settings.muted ? "off" : "on");
+  } catch (e) {}
+}
+
+/* ---------------- Moteur audio ---------------- */
+var ctx = null, master = null, musicBus = null, crowdBus = null, sfxBus = null, noiseBuf = null;
+var unlocked = false;
+function ensureCtx(){
+  if (ctx){ if (ctx.state === "suspended") ctx.resume(); return true; }
+  var AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return false;
+  try {
+    ctx = new AC();
+    master = ctx.createGain(); master.connect(ctx.destination);
+    musicBus = ctx.createGain(); musicBus.gain.value = 0; musicBus.connect(master);
+    crowdBus = ctx.createGain(); crowdBus.gain.value = 0; crowdBus.connect(master);
+    sfxBus = ctx.createGain(); sfxBus.connect(master);
+    var len = Math.floor(ctx.sampleRate * 2);
+    noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
+    var d = noiseBuf.getChannelData(0);
+    for (var i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    applyMaster(0);
+    return true;
+  } catch (e) { ctx = null; return false; }
+}
+function applyMaster(tc){
+  if (!ctx || !master) return;
+  var target = settings.muted ? 0 : Math.pow(settings.volume, 1.5) * 0.9;
+  master.gain.setTargetAtTime(target, ctx.currentTime, tc == null ? 0.05 : tc);
+}
+
+/* ---------------- Musique des menus (nappes lentes) ---------------- */
+var CHORDS = [
+  [110.00, 164.81, 246.94, 261.63], /* La mineur 9 */
+  [87.31, 130.81, 164.81, 220.00],  /* Fa majeur 7 */
+  [130.81, 196.00, 246.94, 329.63], /* Do majeur 7 */
+  [98.00, 146.83, 220.00, 246.94]   /* Sol add9 */
+];
+var musicOn = false, musicTimer = null, chordIdx = 0;
+function playChord(freqs){
+  if (!ctx || !musicOn) return;
+  var t = ctx.currentTime;
+  var lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 820; lp.Q.value = 0.4;
+  lp.connect(musicBus);
+  freqs.forEach(function(f, i){
+    var o = ctx.createOscillator();
+    o.type = i === 0 ? "sine" : "triangle";
+    o.frequency.value = f;
+    var g = ctx.createGain();
+    var peak = i === 0 ? 0.15 : 0.07;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + 1.9);
+    g.gain.setValueAtTime(peak, t + 4.4);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 7.6);
+    o.connect(g); g.connect(lp);
+    o.start(t); o.stop(t + 7.8);
+  });
+}
+function startMusic(){
+  if (!ctx || musicOn) return;
+  musicOn = true;
+  musicBus.gain.cancelScheduledValues(ctx.currentTime);
+  musicBus.gain.setTargetAtTime(0.55, ctx.currentTime, 0.9);
+  playChord(CHORDS[chordIdx % CHORDS.length]); chordIdx++;
+  clearInterval(musicTimer);
+  musicTimer = setInterval(function(){
+    if (musicOn){ playChord(CHORDS[chordIdx % CHORDS.length]); chordIdx++; }
+  }, 7000);
+}
+function stopMusic(){
+  if (!musicOn) return;
+  musicOn = false;
+  clearInterval(musicTimer); musicTimer = null;
+  if (ctx) musicBus.gain.setTargetAtTime(0, ctx.currentTime, 0.35);
+}
+
+/* ---------------- Ambiance de stade (foule en boucle) ---------------- */
+var crowdOn = false, crowdNodes = null, crowdEnergy = 0.35;
+function startCrowd(){
+  if (!ctx || crowdOn) return;
+  crowdOn = true;
+  crowdEnergy = 0.35;
+  var src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+  var lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 480; lp.Q.value = 0.3;
+  var g = ctx.createGain(); g.gain.value = 0;
+  src.connect(lp); lp.connect(g); g.connect(crowdBus);
+  var src2 = ctx.createBufferSource(); src2.buffer = noiseBuf; src2.loop = true; src2.playbackRate.value = 0.7;
+  var bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 950; bp.Q.value = 0.5;
+  var g2 = ctx.createGain(); g2.gain.value = 0;
+  src2.connect(bp); bp.connect(g2); g2.connect(crowdBus);
+  src.start(); src2.start();
+  crowdBus.gain.cancelScheduledValues(ctx.currentTime);
+  crowdBus.gain.setTargetAtTime(1, ctx.currentTime, 0.7);
+  crowdNodes = { src: src, src2: src2, g: g, g2: g2 };
+}
+function stopCrowd(){
+  if (!crowdOn) return;
+  crowdOn = false;
+  if (!ctx || !crowdNodes){ crowdNodes = null; return; }
+  var nodes = crowdNodes; crowdNodes = null;
+  crowdBus.gain.setTargetAtTime(0, ctx.currentTime, 0.25);
+  setTimeout(function(){
+    try { nodes.src.stop(); } catch (e) {}
+    try { nodes.src2.stop(); } catch (e) {}
+  }, 1000);
+}
+function tickCrowd(base){
+  crowdEnergy += (base - crowdEnergy) * 0.05;
+  if (crowdNodes && ctx){
+    var t = ctx.currentTime;
+    crowdNodes.g.gain.setTargetAtTime(0.035 + crowdEnergy * 0.15, t, 0.18);
+    crowdNodes.g2.gain.setTargetAtTime(crowdEnergy * 0.055, t, 0.25);
+  }
+}
+
+/* ---------------- Effets : foule, sifflets, clic ---------------- */
+function noiseBurst(o){
+  if (!ctx) return;
+  var t = ctx.currentTime + (o.delay || 0);
+  var src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+  src.playbackRate.value = 0.9 + Math.random() * 0.2;
+  var f = ctx.createBiquadFilter(); f.type = o.type || "bandpass"; f.Q.value = o.q || 0.7;
+  f.frequency.setValueAtTime(Math.max(40, o.f0), t);
+  f.frequency.exponentialRampToValueAtTime(Math.max(40, o.f1), t + o.dur * 0.85);
+  var g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(o.peak, t + (o.attack || 0.09));
+  g.gain.exponentialRampToValueAtTime(0.0001, t + o.dur);
+  src.connect(f); f.connect(g); g.connect(sfxBus);
+  src.start(t); src.stop(t + o.dur + 0.1);
+}
+function cheerGoal(){ /* grande clameur : but du club du joueur */
+  noiseBurst({ dur: 3.0, peak: 0.85, f0: 620, f1: 1350, q: 0.6, attack: 0.07 });
+  noiseBurst({ dur: 2.2, peak: 0.5, f0: 300, f1: 700, q: 0.5, attack: 0.12, delay: 0.05 });
+  noiseBurst({ dur: 1.4, peak: 0.3, f0: 1500, f1: 2100, q: 1.2, attack: 0.05, delay: 0.02 });
+  crowdEnergy = 1;
+}
+function groanGoal(){ /* grognement déçu : but adverse */
+  noiseBurst({ dur: 1.5, peak: 0.5, f0: 850, f1: 260, q: 0.8, attack: 0.1 });
+  if (ctx){
+    var t = ctx.currentTime;
+    var o = ctx.createOscillator(); o.type = "sine";
+    o.frequency.setValueAtTime(170, t);
+    o.frequency.exponentialRampToValueAtTime(95, t + 1.1);
+    var g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.12, t + 0.15);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.2);
+    o.connect(g); g.connect(sfxBus);
+    o.start(t); o.stop(t + 1.3);
+  }
+  crowdEnergy = 0.55;
+}
+function chanceSwell(){ /* la foule monte sur une occasion */
+  noiseBurst({ dur: 1.5, peak: 0.4, f0: 550, f1: 1050, q: 0.7, attack: 0.25 });
+  if (crowdEnergy < 0.72) crowdEnergy = 0.72;
+}
+function whistleOnce(t, dur){
+  var o = ctx.createOscillator(); o.type = "square"; o.frequency.value = 2350;
+  var f = ctx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 3800;
+  var g = ctx.createGain();
+  var lfo = ctx.createOscillator(); lfo.frequency.value = 38;
+  var lg = ctx.createGain(); lg.gain.value = 0.09;
+  g.gain.setValueAtTime(0.17, t);
+  g.gain.setValueAtTime(0.17, Math.max(t, t + dur - 0.03));
+  g.gain.linearRampToValueAtTime(0.0001, t + dur);
+  lfo.connect(lg); lg.connect(g.gain);
+  o.connect(f); f.connect(g); g.connect(sfxBus);
+  o.start(t); o.stop(t + dur + 0.05);
+  lfo.start(t); lfo.stop(t + dur + 0.05);
+  noiseBurst({ dur: dur, peak: 0.05, f0: 2400, f1: 2400, q: 2.5, attack: 0.02, delay: t - ctx.currentTime });
+}
+function whistle(pattern){
+  if (!ctx) return;
+  var t = ctx.currentTime + 0.02;
+  pattern.forEach(function(dur){ whistleOnce(t, dur); t += dur + 0.17; });
+}
+var lastClickAt = 0;
+function uiClick(){
+  if (!ctx || settings.muted) return;
+  var now = Date.now();
+  if (now - lastClickAt < 70) return;
+  lastClickAt = now;
+  var t = ctx.currentTime;
+  var o = ctx.createOscillator(); o.type = "sine";
+  o.frequency.setValueAtTime(1250, t);
+  o.frequency.exponentialRampToValueAtTime(760, t + 0.035);
+  var g = ctx.createGain();
+  g.gain.setValueAtTime(0.1, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.045);
+  o.connect(g); g.connect(sfxBus);
+  o.start(t); o.stop(t + 0.06);
+}
+
+/* ---------------- Ambiance selon l'écran ---------------- */
+var mode = "menu"; /* "menu" | "live" */
+function refreshAmbience(){
+  if (!ctx || !unlocked) return;
+  if (mode === "live"){ stopMusic(); startCrowd(); }
+  else { stopCrowd(); startMusic(); }
+}
+function onGesture(){
+  if (!ensureCtx()) return;
+  if (ctx.state === "suspended") ctx.resume();
+  if (!unlocked){ unlocked = true; refreshAmbience(); }
+}
+window.addEventListener("pointerdown", onGesture, true);
+window.addEventListener("touchend", onGesture, true);
+window.addEventListener("keydown", onGesture, true);
+document.addEventListener("visibilitychange", function(){
+  if (!ctx) return;
+  if (document.hidden){ if (ctx.state === "running") ctx.suspend(); }
+  else if (unlocked && ctx.state === "suspended") ctx.resume();
+});
+
+/* ---------------- Côté du club du joueur dans le direct ---------------- */
+function normName(s){
+  return (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+}
+function myClubName(){
+  var name = null, id = null, i, j, k;
+  try {
+    var rows = [];
+    try { rows = JSON.parse(localStorage.getItem("mp27local.db.careers") || "[]"); } catch (e) {}
+    if (!Array.isArray(rows) || !rows.length){
+      for (k = 0; k < localStorage.length; k++){
+        var key0 = localStorage.key(k);
+        if (!key0 || key0.indexOf("mp27local.db.") !== 0) continue;
+        try {
+          var arr0 = JSON.parse(localStorage.getItem(key0) || "[]");
+          if (Array.isArray(arr0) && arr0.some(function(o){ return o && o.clubName; })){ rows = arr0; break; }
+        } catch (e) {}
+      }
+    }
+    if (Array.isArray(rows)){
+      for (i = 0; i < rows.length; i++){
+        if (rows[i] && rows[i].clubName){ name = rows[i].clubName; id = rows[i].clubId; break; }
+      }
+    }
+    if (id != null){
+      for (k = 0; k < localStorage.length; k++){
+        var key = localStorage.key(k);
+        if (!key || key.indexOf("mp27local.db.") !== 0) continue;
+        try {
+          var arr = JSON.parse(localStorage.getItem(key) || "[]");
+          if (!Array.isArray(arr)) continue;
+          for (j = 0; j < arr.length; j++){
+            var o = arr[j];
+            if (o && o.id === id && typeof o.name === "string" && o.name && ("color" in o || "leagueId" in o || "shortName" in o || "primary" in o)) return o.name;
+          }
+        } catch (e) {}
+      }
+    }
+  } catch (e) {}
+  return name;
+}
+function resolveUserSide(main){
+  var cols = main.querySelectorAll("span.w-24");
+  if (cols.length < 2) return null;
+  function colName(c){
+    var spans = c.querySelectorAll("span"), best = "";
+    spans.forEach(function(s){
+      var t = (s.textContent || "").trim();
+      if (t && !/^\d+$/.test(t)) best = t;
+    });
+    return best;
+  }
+  var home = colName(cols[0]), away = colName(cols[1]);
+  var mine = myClubName();
+  if (!mine || !home || !away) return "home";
+  var nm = normName(mine), nh = normName(home), na = normName(away);
+  if (nh === nm) return "home";
+  if (na === nm) return "away";
+  if (nh && (nh.indexOf(nm) >= 0 || nm.indexOf(nh) >= 0)) return "home";
+  if (na && (na.indexOf(nm) >= 0 || nm.indexOf(na) >= 0)) return "away";
+  return "home";
+}
+
+/* ---------------- Suivi du match en direct ---------------- */
+var liveSession = null, livePollTimer = null;
+function fireGoal(sideHome){
+  if (!liveSession) return;
+  liveSession.lastGoalAt = Date.now();
+  var userHome = liveSession.userSide !== "away";
+  if (sideHome === userHome) cheerGoal(); else groanGoal();
+}
+function enterLive(main){
+  mode = "live";
+  stopMusic();
+  startCrowd();
+  liveSession = {
+    main: main, lastBanner: null, lastComment: "", lastScore: -1, lastHome: 0,
+    kickoff: false, ht: false, ft: false, secondKick: false, lastMinute: -1,
+    userSide: null, lastGoalAt: 0
+  };
+  clearInterval(livePollTimer);
+  livePollTimer = setInterval(pollLive, 200);
+  pollLive();
+  setTimeout(syncGameToggle, 700);
+}
+function exitLive(){
+  mode = "menu";
+  clearInterval(livePollTimer); livePollTimer = null;
+  liveSession = null;
+  stopCrowd();
+  if (unlocked) startMusic();
+}
+function pollLive(){
+  var S = liveSession;
+  if (!S) return;
+  var main = S.main;
+  if (!document.contains(main)){ exitLive(); return; }
+  if (!S.userSide) S.userSide = resolveUserSide(main);
+  tickCrowd(S.ft ? 0.15 : 0.35);
+  /* Bandeau du terrain : But / Occasion / Action */
+  var pitch = main.querySelector(".live-pitch");
+  if (pitch){
+    var banner = "";
+    pitch.querySelectorAll("p").forEach(function(p){
+      var t = (p.textContent || "").trim();
+      if (/^(But|Occasion|Action)/.test(t)) banner = t;
+    });
+    if (banner && S.lastBanner !== null && banner !== S.lastBanner){
+      if (banner.indexOf("Occasion") === 0) chanceSwell();
+      else if (/^But ! (.+) \d+'$/.test(banner)){
+        var scorer = banner.match(/^But ! (.+) \d+'$/)[1];
+        var sideHome = true, foundDot = false;
+        pitch.querySelectorAll("span[title]").forEach(function(dth, idx){
+          if (foundDot) return;
+          var title = dth.getAttribute("title") || "";
+          if (title === scorer || title.indexOf(scorer + " (") === 0){ sideHome = idx < 11; foundDot = true; }
+        });
+        if (Date.now() - S.lastGoalAt > 2500) fireGoal(sideHome);
+      }
+    }
+    if (banner) S.lastBanner = banner;
+    else if (S.lastBanner === null) S.lastBanner = "";
+  }
+  /* Score (détection de secours et suivi) */
+  var found = false, hs = 0, as = 0;
+  main.querySelectorAll("span").forEach(function(s){
+    if (found) return;
+    var t = (s.textContent || "").trim();
+    var m = t.match(/^(\d+) - (\d+)$/);
+    if (m){ hs = parseInt(m[1], 10); as = parseInt(m[2], 10); found = true; }
+  });
+  if (found){
+    if (S.lastScore >= 0 && hs + as > S.lastScore){
+      if (Date.now() - S.lastGoalAt > 2500) fireGoal(hs > S.lastHome);
+    }
+    if (hs + as === 0 && S.lastScore > 0){ /* nouveau match sans quitter l'écran */
+      S.kickoff = false; S.ht = false; S.ft = false; S.secondKick = false; S.lastMinute = -1; S.lastComment = "";
+    }
+    S.lastScore = hs + as; S.lastHome = hs;
+  }
+  /* Commentaire : sifflets et cartons */
+  var com = main.querySelector('[aria-label="Commentaire du match en direct"]');
+  if (com){
+    var ct = (com.textContent || "").trim();
+    if (ct && ct !== S.lastComment){
+      var isFirst = !S.lastComment;
+      S.lastComment = ct;
+      if (/coup d'envoi/i.test(ct) && !S.kickoff){ S.kickoff = true; whistle([0.4]); }
+      if (!isFirst){
+        if (/mi-temps/i.test(ct) && !S.ht){ S.ht = true; whistle([0.3, 0.55]); }
+        else if (/coup de sifflet final/i.test(ct) && !S.ft){ S.ft = true; whistle([0.3, 0.3, 0.95]); }
+        if (/carton (jaune|rouge)/i.test(ct)) whistle([0.16]);
+      }
+    }
+  }
+  /* Horloge du match : coup d'envoi, reprise, fin */
+  var minute = -1, ended = false;
+  main.querySelectorAll("span").forEach(function(s){
+    var t = (s.textContent || "").trim();
+    if (t === "TERMINÉ") ended = true;
+    var mm = t.match(/^(\d{1,3})'$/);
+    if (mm && minute < 0){
+      var inCom = false;
+      try { inCom = !!s.closest('[aria-label="Commentaire du match en direct"]'); } catch (e) {}
+      if (!inCom) minute = parseInt(mm[1], 10);
+    }
+  });
+  if (ended && !S.ft){ S.ft = true; whistle([0.3, 0.3, 0.95]); }
+  if (minute >= 0){
+    if (!S.kickoff && minute >= 1){ S.kickoff = true; whistle([0.4]); }
+    if (S.ht && !S.secondKick && S.lastMinute >= 0 && S.lastMinute <= 45 && minute >= 46){ S.secondKick = true; whistle([0.35]); }
+    S.lastMinute = minute;
+  }
+}
+
+/* ---------------- Synchronisation avec le bouton son du direct ---------------- */
+var syncingGameBtn = false;
+function gameSoundBtn(){
+  return document.querySelector('button[aria-label="Couper le son du direct"], button[aria-label="Activer le son du direct"]');
+}
+function syncGameToggle(){
+  var b = gameSoundBtn();
+  if (!b) return;
+  var gameOn = b.getAttribute("aria-pressed") === "true";
+  if (gameOn === !settings.muted) return;
+  syncingGameBtn = true;
+  b.click();
+  setTimeout(function(){ syncingGameBtn = false; }, 350);
+}
+
+/* ---------------- Interface : bouton muet + réglage du volume ---------------- */
+var SVG_ON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z" fill="currentColor" stroke="none"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.4 5.6a9 9 0 0 1 0 12.8"/></svg>';
+var SVG_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z" fill="currentColor" stroke="none"/><line x1="16" y1="9" x2="22" y2="15"/><line x1="22" y1="9" x2="16" y2="15"/></svg>';
+var muteBtn = document.createElement("button");
+muteBtn.type = "button";
+muteBtn.className = "mpaudio-ui mpaudio-mute";
+document.body.appendChild(muteBtn);
+muteBtn.addEventListener("click", function(e){
+  e.stopPropagation();
+  onGesture();
+  setMuted(!settings.muted, false);
+});
+function setMuted(m, fromGame){
+  settings.muted = !!m;
+  saveSettings();
+  applyMaster(0.03);
+  refreshAudioUI();
+  if (!fromGame) syncGameToggle();
+}
+function refreshAudioUI(){
+  muteBtn.innerHTML = settings.muted ? SVG_OFF : SVG_ON;
+  muteBtn.setAttribute("aria-pressed", settings.muted ? "true" : "false");
+  muteBtn.setAttribute("aria-label", settings.muted ? "Activer le son et la musique" : "Couper le son et la musique");
+  document.querySelectorAll(".mpaudio-vol").forEach(function(inp){
+    inp.value = String(Math.round(settings.volume * 100));
+  });
+  document.querySelectorAll(".mpaudio-volval").forEach(function(v){
+    v.textContent = Math.round(settings.volume * 100) + " %";
+  });
+  document.querySelectorAll(".mpaudio-mutebtn").forEach(function(b){
+    b.textContent = settings.muted ? "Activer le son" : "Couper le son";
+    b.setAttribute("aria-pressed", settings.muted ? "true" : "false");
+  });
+}
+function buildSettingsCard(){
+  var sec = document.createElement("section");
+  sec.className = "v2-card mpaudio-ui mpaudio-settings";
+  sec.setAttribute("aria-label", "Son et musique");
+  var h = document.createElement("h2");
+  h.className = "font-display flex items-center gap-2 text-2xl font-bold";
+  h.innerHTML = '<span class="mpaudio-hic">' + SVG_ON + '</span> Son et musique';
+  sec.appendChild(h);
+  var row = document.createElement("div");
+  row.style.cssText = "display:flex;align-items:center;gap:12px;margin-top:12px";
+  var lab = document.createElement("label");
+  lab.textContent = "Volume";
+  lab.style.cssText = "font-weight:700;font-size:15px";
+  var inp = document.createElement("input");
+  inp.type = "range"; inp.min = "0"; inp.max = "100"; inp.step = "1";
+  inp.className = "mpaudio-vol";
+  inp.style.cssText = "flex:1;min-width:0";
+  inp.setAttribute("aria-label", "Volume du son et de la musique");
+  var val = document.createElement("span");
+  val.className = "mpaudio-volval";
+  val.style.cssText = "font-weight:700;font-size:14px;min-width:44px;text-align:right;font-variant-numeric:tabular-nums";
+  inp.addEventListener("input", function(){
+    settings.volume = Math.min(1, Math.max(0, (parseInt(inp.value, 10) || 0) / 100));
+    if (settings.muted && settings.volume > 0) settings.muted = false;
+    saveSettings();
+    onGesture();
+    applyMaster(0.03);
+    refreshAudioUI();
+  });
+  inp.addEventListener("change", function(){ uiClick(); });
+  row.appendChild(lab); row.appendChild(inp); row.appendChild(val);
+  sec.appendChild(row);
+  var btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "mpaudio-mutebtn";
+  btn.style.cssText = "margin-top:12px;width:100%;border-radius:12px;padding:11px;font-weight:800;font-size:15px;background:var(--surface2);border:1px solid var(--border);color:inherit;cursor:pointer";
+  btn.addEventListener("click", function(){ onGesture(); setMuted(!settings.muted, false); });
+  sec.appendChild(btn);
+  return sec;
+}
+function injectSettings(){
+  var anchor = document.querySelector('button[aria-label="Basculer l\'argent illimité"]');
+  if (anchor){
+    var sec = anchor.closest ? anchor.closest("section") : null;
+    if (sec && sec.parentNode && !document.querySelector(".mpaudio-settings")){
+      sec.parentNode.insertBefore(buildSettingsCard(), sec.nextSibling);
+      refreshAudioUI();
+    }
+  }
+  var menuDlg = document.querySelector('div[role="dialog"][aria-label="Menu du club"]');
+  if (menuDlg && !menuDlg.querySelector(".mpaudio-settings")){
+    var inner = menuDlg.firstElementChild;
+    if (inner){
+      var card = buildSettingsCard();
+      card.style.marginTop = "10px";
+      if (inner.children.length > 1) inner.insertBefore(card, inner.children[1]);
+      else inner.appendChild(card);
+      refreshAudioUI();
+    }
+  }
+}
+
+/* ---------------- Rubrique du guide ---------------- */
+function injectGuide(){
+  var dlg = document.querySelector('div[role="dialog"][aria-label="Fonctionnement du jeu"]');
+  if (!dlg || dlg.querySelector(".mpaudio-guide")) return;
+  var list = dlg.querySelector("div.space-y-2\\.5");
+  if (!list){
+    dlg.querySelectorAll("div").forEach(function(d){
+      if (!list && (d.className || "").indexOf("space-y-2") >= 0) list = d;
+    });
+  }
+  if (!list) return;
+  var sec = document.createElement("section");
+  sec.className = "v2-card mpaudio-guide";
+  sec.style.cssText = "padding:0;overflow:hidden";
+  sec.setAttribute("aria-label", "Les sons et la musique");
+  var btn = document.createElement("button");
+  btn.type = "button";
+  btn.style.cssText = "display:flex;width:100%;align-items:center;gap:12px;padding:14px 16px;text-align:left;background:transparent;border:0;color:inherit;font:inherit;cursor:pointer";
+  btn.setAttribute("aria-expanded", "false");
+  btn.setAttribute("aria-label", "Ouvrir la rubrique Les sons et la musique");
+  var ico = document.createElement("span");
+  ico.style.cssText = "display:flex;height:36px;width:36px;flex:none;align-items:center;justify-content:center;border-radius:10px;background:var(--accent);color:#06281C";
+  ico.innerHTML = '<span style="display:block;width:20px;height:20px">' + SVG_ON + '</span>';
+  var ttl = document.createElement("span");
+  ttl.style.cssText = "flex:1;min-width:0;font-size:17px;font-weight:800;text-transform:uppercase;letter-spacing:.4px";
+  ttl.textContent = "Les sons et la musique";
+  var chev = document.createElement("span");
+  chev.style.cssText = "color:var(--dim);font-size:20px;font-weight:700;transition:transform .2s";
+  chev.textContent = "›";
+  btn.appendChild(ico); btn.appendChild(ttl); btn.appendChild(chev);
+  var body = document.createElement("div");
+  body.style.cssText = "border-top:1px solid var(--border);padding:12px 16px";
+  body.hidden = true;
+  var paras = [
+    "Le jeu a sa propre bande-son, entièrement générée en direct par le programme (Web Audio) : aucun fichier audio n'est téléchargé, le jeu reste un seul fichier, léger et jouable hors-ligne.",
+    "Musique des menus : une ambiance calme — des nappes d'accords lentes, dans l'esprit de Football Manager — joue sur l'écran de connexion, l'Accueil et les menus. Elle s'arrête en fondu dès qu'un match commence.",
+    "Pendant le match en direct : l'ambiance du stade (la foule en fond) monte sur les occasions, explose en grande clameur quand ton club marque et retombe en grognement déçu quand l'adversaire marque. Les sifflets de l'arbitre sonnent au coup d'envoi, à la mi-temps et à la fin du match, et un sifflet court accompagne chaque carton. Un petit clic discret confirme les pressions sur les boutons principaux.",
+    "Le son ne peut démarrer qu'après ton premier toucher ou clic sur l'écran : c'est une règle imposée par les navigateurs, le premier geste lance l'audio.",
+    "Pour couper le son : le bouton haut-parleur en haut à droite de l'écran (il reste visible partout), ou le bouton son de l'écran du direct — les deux sont liés. Pour régler le volume : Menu → Réglages, rubrique « Son et musique », ou directement dans le Menu. Ton choix (son coupé ou non, niveau du volume) est mémorisé sur l'appareil et retrouvé à la prochaine ouverture du jeu."
+  ];
+  paras.forEach(function(t, i){
+    var p = document.createElement("p");
+    p.style.cssText = "margin:" + (i ? "8px" : "0") + " 0 0;font-size:14px;line-height:1.55;color:var(--dim)";
+    p.textContent = t;
+    body.appendChild(p);
+  });
+  btn.addEventListener("click", function(){
+    var open = body.hidden;
+    body.hidden = !open;
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    btn.setAttribute("aria-label", (open ? "Replier" : "Ouvrir") + " la rubrique Les sons et la musique");
+    chev.style.transform = open ? "rotate(90deg)" : "";
+  });
+  sec.appendChild(btn); sec.appendChild(body);
+  list.appendChild(sec);
+}
+
+/* ---------------- Clics d'interface + synchro du bouton du direct ---------------- */
+document.addEventListener("click", function(e){
+  var t = e.target;
+  if (!t || !t.closest) return;
+  var gb = t.closest('button[aria-label="Couper le son du direct"], button[aria-label="Activer le son du direct"]');
+  if (gb){
+    if (!syncingGameBtn){
+      setTimeout(function(){
+        var now = gameSoundBtn();
+        if (now) setMuted(now.getAttribute("aria-pressed") !== "true", true);
+      }, 60);
+    }
+    return;
+  }
+  if (t.closest(".mpaudio-ui")) return;
+  if (t.closest('button, a, [role="button"]')) uiClick();
+}, true);
+
+/* ---------------- Observation des écrans ---------------- */
+function scanAudio(){
+  var liveMain = document.querySelector('main[aria-label="Match en direct, plein écran"]');
+  if (liveMain){
+    if (mode !== "live" || !liveSession || liveSession.main !== liveMain) enterLive(liveMain);
+    else if (unlocked && !crowdOn) startCrowd();
+  } else if (mode === "live"){
+    exitLive();
+  }
+  injectSettings();
+  injectGuide();
+}
+var scanAudioQ = false;
+function queueScanAudio(){
+  if (scanAudioQ) return;
+  scanAudioQ = true;
+  setTimeout(function(){ scanAudioQ = false; scanAudio(); }, 150);
+}
+new MutationObserver(queueScanAudio).observe(document.documentElement, { childList: true, subtree: true });
+setInterval(scanAudio, 2500);
+refreshAudioUI();
+queueScanAudio();
+})();
+
+</script>
+
 </body>
 </html>
