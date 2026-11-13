@@ -1,0 +1,21 @@
+name: Rename to index
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rename:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rename uploaded file to index.html
+        run: |
+          mv football-manager-mode-carri-re-version-locale.html index.html
+          git config user.name "barrymlamine35"
+          git config user.email "barrymlamine35@users.noreply.github.com"
+          git add -A
+          git commit -m "Rename uploaded file to index.html"
+          git push
