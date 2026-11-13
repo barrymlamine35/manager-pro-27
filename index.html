@@ -235,6 +235,7 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
 .mp3d-view-trophy{background:radial-gradient(120% 100% at 50% 0%,#3A2C07 0%,#171106 55%,#0B0903 100%)}
 .mp3d-view-trophy canvas{cursor:grab}
 .mp3d-view-trophy canvas:active{cursor:grabbing}
+.mp3d-view-lineup{background:radial-gradient(130% 105% at 50% 0%,#175C33 0%,#0A3520 72%)}
 .mp3d-trophy-cap{position:absolute;left:0;right:0;bottom:0;z-index:5;padding:30px 14px 12px;text-align:center;pointer-events:none;background:linear-gradient(180deg,transparent,rgba(5,4,1,.8))}
 .mp3d-trophy-cap b{display:block;font-size:19px;font-weight:900;letter-spacing:.4px;color:#F5C86B;text-transform:uppercase;line-height:1.15}
 .mp3d-trophy-cap span{display:block;margin-top:2px;font-size:13px;font-weight:700;color:rgba(255,255,255,.88)}
@@ -2475,9 +2476,400 @@ function attachHomeMini(banner){
   } else tryStart();
 }
 
+/* ================= COMPOSITIONS 3D — AVANT-MATCH ================= */
+var lineup = null;
+var LINEUP_LABELS = { gk: "Gardien", def: "Défenseurs", mid: "Milieux", fwd: "Attaquants" };
+function lineupCat(pos){
+  var t = (pos || "").toUpperCase().trim();
+  if (/GARD/.test(t) || t === "G") return "gk";
+  if (/MILIEU/.test(t) || t === "MIL" || t === "MDF" || t === "MC" || t === "MOC" || t === "MD" || t === "MG" || t === "MO") return "mid";
+  if (/DÉF|DEF/.test(t) || t === "DC" || t === "DD" || t === "DG" || t === "DL" || t === "DR" || /ARRIÈRE|LATÉRAL/.test(t)) return "def";
+  if (/AILIER/.test(t) || t === "AG" || t === "AD") return "wing";
+  return "fwd";
+}
+function lineupLines(starters, formation){
+  var lines = [];
+  if (!starters.length) return lines;
+  var digits = null;
+  if (formation){
+    var parts = formation.split("-").map(function(x){ return parseInt(x, 10); });
+    var sum = parts.reduce(function(a, b){ return a + b; }, 0);
+    if (parts.length >= 2 && sum === starters.length - 1 && parts.every(function(n){ return n > 0 && n <= 6; })) digits = parts;
+  }
+  if (digits){
+    lines.push({ cat: "gk", label: "Gardien", players: [starters[0]] });
+    var idx = 1;
+    digits.forEach(function(n, i){
+      var cat = i === digits.length - 1 ? "fwd" : (i === 0 ? "def" : "mid");
+      lines.push({ cat: cat, label: LINEUP_LABELS[cat], players: starters.slice(idx, idx + n) });
+      idx += n;
+    });
+    return lines;
+  }
+  var cats = starters.map(function(p){ return lineupCat(p.pos); });
+  var pureFwd = cats.filter(function(c){ return c === "fwd"; }).length;
+  cats = cats.map(function(c){ return c === "wing" ? (pureFwd >= 2 ? "mid" : "fwd") : c; });
+  var order = { gk: 0, def: 1, mid: 2, fwd: 3 };
+  var cur = null;
+  starters.forEach(function(p, i){
+    if (!cur || cur.cat !== cats[i]){ cur = { cat: cats[i], label: LINEUP_LABELS[cats[i]], players: [] }; lines.push(cur); }
+    cur.players.push(p);
+  });
+  lines.sort(function(a, b){ return order[a.cat] - order[b.cat]; });
+  var merged = [];
+  lines.forEach(function(l){
+    var last = merged[merged.length - 1];
+    if (last && last.cat === l.cat) last.players = last.players.concat(l.players);
+    else merged.push(l);
+  });
+  return merged;
+}
+function lineupParseRow(li){
+  var kids = li.children;
+  if (kids.length < 3) return null;
+  var pos = (kids[1].textContent || "").trim();
+  var name = (kids[2].textContent || "").trim().replace(/\s*\(blessé\)\s*$/, "");
+  var rating = "";
+  for (var i = kids.length - 1; i >= 1; i--){
+    var tx = (kids[i].textContent || "").trim();
+    if (/^\d{1,2}$/.test(tx)){ rating = tx; break; }
+  }
+  if (!name) return null;
+  return { name: name, pos: pos, rating: rating };
+}
+function lineupColor(slide, team, own){
+  var svg = slide.querySelector("svg");
+  if (svg){
+    var best = null, bestScore = -1;
+    svg.querySelectorAll("[fill]").forEach(function(n){
+      var rgb = hexRgb((n.getAttribute("fill") || "").trim());
+      if (!rgb) return;
+      var mx = Math.max(rgb.r, rgb.g, rgb.b), mn = Math.min(rgb.r, rgb.g, rgb.b);
+      if (mx < 40 || mx - mn < 30) return;
+      var score = (mx - mn) - (mx > 210 ? 25 : 0);
+      if (score > bestScore){ bestScore = score; best = n.getAttribute("fill").trim(); }
+    });
+    if (best) return best;
+  }
+  if (own){ var c = infraClubColor(); if (c) return c; }
+  return CLUB3D_COLORS[playerHash(team || "?") % CLUB3D_COLORS.length];
+}
+function lineupRead(main){
+  var slide = main.querySelector(".slide-in");
+  if (!slide) return null;
+  var cap = "";
+  main.querySelectorAll("p").forEach(function(p){
+    var t = (p.textContent || "").trim();
+    if (/^Composition [12]\/2/.test(t)) cap = t;
+  });
+  var own = /Ton équipe/.test(cap);
+  var nameEl = null;
+  slide.querySelectorAll("p").forEach(function(p){
+    if (!nameEl && (p.className || "").indexOf("text-3xl") >= 0) nameEl = p;
+  });
+  if (!nameEl) return null;
+  var team = (nameEl.textContent || "").trim();
+  var subtitle = "";
+  var headPs = nameEl.parentNode ? nameEl.parentNode.querySelectorAll("p") : [];
+  if (headPs.length > 1) subtitle = (headPs[1].textContent || "").trim();
+  var fm = subtitle.match(/(\d+(?:-\d+)+)/);
+  var formation = fm ? fm[1] : "";
+  var starters = [], subs = [];
+  slide.querySelectorAll("ul").forEach(function(ul){
+    var lab = ul.getAttribute("aria-label") || "";
+    if (lab.indexOf("Onze de départ") === 0){
+      ul.querySelectorAll(":scope > li").forEach(function(li){
+        var r = lineupParseRow(li);
+        if (r) starters.push(r);
+      });
+    } else if (lab.indexOf("Remplaçants") === 0){
+      ul.querySelectorAll(":scope > li").forEach(function(li){
+        var parts = (li.textContent || "").split("•").map(function(s){ return s.trim(); });
+        if (parts.length >= 3) subs.push({ pos: parts[0], name: parts[1], rating: parts[parts.length - 1] });
+        else if (parts.length === 2) subs.push({ pos: parts[0], name: parts[1], rating: "" });
+      });
+    }
+  });
+  if (!starters.length) return null;
+  subs = subs.slice(0, 7);
+  var lines = lineupLines(starters, formation);
+  if (!formation) formation = lines.slice(1).map(function(l){ return l.players.length; }).join("-");
+  var color = lineupColor(slide, team, own);
+  var sig = [team, formation, color]
+    .concat(starters.map(function(p){ return p.name + ":" + p.pos + ":" + p.rating; }))
+    .concat(subs.map(function(p){ return "s:" + p.name; })).join("|");
+  return { team: team, own: own, formation: formation, lines: lines, subs: subs, color: color, sig: sig };
+}
+function lineupNameSprite(THREE, name, w){
+  var label = (name || "").trim().split(/\s+/).pop().toUpperCase();
+  var c = document.createElement("canvas"); c.width = 320; c.height = 84;
+  var g = c.getContext("2d");
+  var fs = 46;
+  g.font = "800 " + fs + "px Arial, sans-serif";
+  while (g.measureText(label).width > 268 && fs > 20){ fs -= 3; g.font = "800 " + fs + "px Arial, sans-serif"; }
+  var tw = Math.min(306, g.measureText(label).width + 46);
+  var x0 = (320 - tw) / 2;
+  g.beginPath();
+  g.moveTo(x0 + 18, 10); g.lineTo(x0 + tw - 18, 10); g.arcTo(x0 + tw, 10, x0 + tw, 42, 18);
+  g.arcTo(x0 + tw, 74, x0 + tw - 18, 74, 18); g.lineTo(x0 + 18, 74);
+  g.arcTo(x0, 74, x0, 42, 18); g.arcTo(x0, 10, x0 + 18, 10, 18); g.closePath();
+  g.fillStyle = "rgba(5,9,14,.78)"; g.fill();
+  g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillText(label, 160, 45);
+  var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
+  sp.scale.set(w, w * 84 / 320, 1);
+  sp.position.y = 8.7;
+  return sp;
+}
+function buildLineup(THREE, S){
+  if (S.pawnRoot){ S.scene.remove(S.pawnRoot); disposeObj(S.pawnRoot); S.pawnRoot = null; }
+  var data = S.data;
+  var root = new THREE.Group();
+  S.scene.add(root);
+  S.pawnRoot = root;
+  var midLines = data.lines.filter(function(l){ return l.cat === "mid"; });
+  var midZ = midLines.length <= 1 ? [2] : midLines.length === 2 ? [11, -8] : [14, 0, -13];
+  var midIdx = 0;
+  function zFor(l){
+    if (l.cat === "gk") return 40;
+    if (l.cat === "def") return 25;
+    if (l.cat === "fwd") return -24;
+    var z = midZ[Math.min(midIdx, midZ.length - 1)]; midIdx++; return z;
+  }
+  S.startPawns = []; S.subPawns = [];
+  data.lines.forEach(function(l, li){
+    var z = zFor(l);
+    var n = l.players.length;
+    var span = Math.min((n - 1) * 11.5, 47);
+    l.players.forEach(function(p, i){
+      var grp = makePawn(THREE, l.cat === "gk" ? "#E9B949" : data.color, p.rating || "");
+      grp.add(lineupNameSprite(THREE, p.name, 10.6));
+      grp.position.set(n === 1 ? 0 : -span / 2 + span * i / (n - 1), 0, z);
+      grp.scale.setScalar(0.0001);
+      root.add(grp);
+      S.startPawns.push({ grp: grp, line: li, idx: i });
+    });
+  });
+  var sn = data.subs.length;
+  var sspan = Math.min((sn - 1) * 8.6, 50);
+  data.subs.forEach(function(p, i){
+    var grp = makePawn(THREE, data.color, p.rating || "");
+    grp.add(lineupNameSprite(THREE, p.name, 7.6));
+    grp.position.set(sn === 1 ? 0 : -sspan / 2 + sspan * i / (sn - 1), 0, 0);
+    grp.scale.setScalar(0.0001);
+    root.add(grp);
+    S.subPawns.push({ grp: grp, idx: i });
+  });
+  S.lineStart = data.lines.map(function(_, i){ return 0.12 + i * 0.55; });
+  S.tOut = S.lineStart[S.lineStart.length - 1] + 1.0;
+  S.tSubs = S.tOut + 0.16;
+  S.cycle = S.tSubs + Math.max(1, data.subs.length) * 0.06 + 0.95;
+  S.t0 = S.clock.elapsedTime;
+  S.phase = "";
+  if (S.chip){ S.chip.textContent = ""; S.chip.classList.remove("on"); }
+}
+function lineupAria(d){
+  return "Composition 3D de " + d.team + " : sur un terrain de football, les titulaires apparaissent ligne par ligne selon le système " + d.formation + ", puis les " + d.subs.length + " remplaçants";
+}
+function startLineup3D(THREE, main){
+  stopLineup3D();
+  var slide = main.querySelector(".slide-in");
+  if (!slide) return false;
+  var data = lineupRead(main);
+  if (!data) return false;
+  var view = el("div", "mp3d-view mp3d-view-lineup");
+  view.style.aspectRatio = "64 / 82";
+  view.setAttribute("role", "img");
+  view.setAttribute("aria-label", lineupAria(data));
+  slide.parentNode.insertBefore(view, slide);
+  slide.style.display = "none";
+  var chip = el("div", "mp3d-chip");
+  chip.setAttribute("aria-hidden", "true");
+  view.appendChild(chip);
+  var renderer;
+  try { renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" }); }
+  catch (e) {
+    if (view.parentNode) view.parentNode.removeChild(view);
+    slide.style.display = "";
+    return false;
+  }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  view.appendChild(renderer.domElement);
+  var built = baseScene(THREE, true);
+  var scene = built.scene, D = built.D;
+  var gT = makeGoal(THREE, 1); gT.rotation.y = Math.PI / 2; gT.position.set(0, 0, -D / 2); scene.add(gT);
+  var gB = makeGoal(THREE, -1); gB.rotation.y = Math.PI / 2; gB.position.set(0, 0, D / 2); scene.add(gB);
+  var ball = new THREE.Mesh(new THREE.SphereGeometry(0.95, 18, 14), new THREE.MeshLambertMaterial({ color: 0xF5F7FA }));
+  ball.position.set(0, 0.95, 0); scene.add(ball);
+  var camera = new THREE.PerspectiveCamera(50, 64 / 82, 0.1, 600);
+  var reduced = false;
+  try { reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) {}
+  var S = {
+    main: main, slide: slide, view: view, chip: chip, renderer: renderer, scene: scene, camera: camera,
+    pawnRoot: null, startPawns: [], subPawns: [], data: data, sig: data.sig,
+    lineStart: [0], tOut: 3, tSubs: 3.2, cycle: 4.2, t0: 0, phase: "",
+    raf: 0, poll: 0, dead: false, f: 1, reduced: reduced,
+    clock: new THREE.Clock()
+  };
+  lineup = S;
+  buildLineup(THREE, S);
+  S.poll = setInterval(function(){
+    if (S.dead) return;
+    if (!document.contains(main) || !document.contains(view)){ stopLineup3D(); return; }
+    var sl = main.querySelector(".slide-in");
+    if (sl){
+      if (sl !== S.slide) S.slide = sl;
+      if (sl.style.display !== "none") sl.style.display = "none";
+    }
+    var nd = lineupRead(main);
+    if (nd && nd.sig !== S.sig){
+      S.sig = nd.sig; S.data = nd;
+      view.setAttribute("aria-label", lineupAria(nd));
+      try { buildLineup(THREE, S); } catch (e) {}
+    }
+  }, 400);
+  function resize(){
+    var w = view.clientWidth, h = view.clientHeight;
+    if (w > 0 && h > 0){
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+      S.f = camera.aspect >= 0.78 ? 1 : 0.78 / camera.aspect;
+      camera.updateProjectionMatrix();
+    }
+  }
+  S.ro = new ResizeObserver(resize); S.ro.observe(view);
+  resize();
+  function tick(){
+    if (S.dead) return;
+    S.raf = requestAnimationFrame(tick);
+    var dt = Math.min(S.clock.getDelta(), 0.05);
+    var t = S.clock.elapsedTime;
+    var lt = (t - S.t0) % S.cycle;
+    var pop = S.reduced ? 0.01 : 0.3, stag = S.reduced ? 0 : 0.07;
+    function popScale(at){
+      if (lt < at) return 0.0001;
+      if (S.reduced) return 1;
+      var x = Math.min(1, (lt - at) / pop);
+      var c1 = 1.70158, c3 = c1 + 1, u = x - 1;
+      return Math.max(0.0001, 1 + c3 * u * u * u + c1 * u * u);
+    }
+    var outF = lt >= S.tOut ? Math.max(0.0001, 1 - (lt - S.tOut) / 0.22) : 1;
+    S.startPawns.forEach(function(pw){
+      pw.grp.scale.setScalar(popScale(S.lineStart[pw.line] + pw.idx * stag) * outF);
+    });
+    S.subPawns.forEach(function(pw){
+      pw.grp.scale.setScalar(popScale(S.tSubs + pw.idx * (S.reduced ? 0 : 0.06)));
+    });
+    var phase, label;
+    if (lt >= S.tSubs){ phase = "subs"; label = "Remplaçants"; }
+    else if (lt >= S.tOut){ phase = "xi"; label = S.data.team + " — " + S.data.formation; }
+    else {
+      var li2 = 0;
+      for (var i = 0; i < S.lineStart.length; i++) if (lt >= S.lineStart[i]) li2 = i;
+      if (lt > S.lineStart[S.lineStart.length - 1] + 0.62){ phase = "xi"; label = S.data.team + " — " + S.data.formation; }
+      else { phase = "line" + li2; label = S.data.lines[li2].label; }
+    }
+    if (phase !== S.phase){
+      S.phase = phase;
+      S.chip.textContent = label;
+      S.chip.classList.add("on");
+    }
+    camera.position.set(S.reduced ? 0 : Math.sin(t * 0.35) * 1.6, 90 * S.f, 64 * S.f);
+    camera.lookAt(0, 0, 8);
+    renderer.render(scene, camera);
+  }
+  tick();
+  return true;
+}
+function stopLineup3D(){
+  if (!lineup) return;
+  var S = lineup; lineup = null; S.dead = true;
+  cancelAnimationFrame(S.raf); clearInterval(S.poll);
+  if (S.ro) S.ro.disconnect();
+  disposeScene(S.renderer, S.scene);
+  if (S.view && S.view.parentNode) S.view.parentNode.removeChild(S.view);
+  if (S.main && document.contains(S.main)){
+    var sl = S.main.querySelector(".slide-in");
+    if (sl) sl.style.display = "";
+  }
+  if (S.slide && document.contains(S.slide)) S.slide.style.display = "";
+}
+function attachLineup(main){
+  var slide = main.querySelector(".slide-in");
+  if (!slide) return;
+  if (main.querySelector(".mp3d-bar-lineup")) return;
+  if (lineup && lineup.view && document.contains(lineup.view)) return;
+  var mode = "2d";
+  var tg = makeToggle(function(m){
+    mode = m;
+    if (m === "3d"){
+      loadThree().then(function(THREE){
+        if (mode !== "3d" || !document.contains(main)) return;
+        var ok = false;
+        try { ok = startLineup3D(THREE, main); } catch (e) { ok = false; }
+        if (!ok){
+          stopLineup3D();
+          var v3 = main.querySelector(".mp3d-view-lineup");
+          if (v3 && v3.parentNode) v3.parentNode.removeChild(v3);
+          var sl2 = main.querySelector(".slide-in");
+          if (sl2) sl2.style.display = "";
+          tg.setMode("2d"); mode = "2d";
+        }
+      }).catch(function(){ tg.setMode("2d"); mode = "2d"; });
+    } else stopLineup3D();
+  });
+  tg.bar.classList.add("mp3d-bar-lineup");
+  var seg = tg.bar.querySelector('[role="group"]');
+  if (seg) seg.setAttribute("aria-label", "Choisir la vue de la composition : 2D ou 3D");
+  var btns = tg.bar.querySelectorAll("button");
+  if (btns[0]) btns[0].setAttribute("aria-label", "Vue 2D de la composition");
+  if (btns[1]) btns[1].setAttribute("aria-label", "Vue 3D de la composition : présentation des joueurs ligne par ligne sur le terrain");
+  slide.parentNode.insertBefore(tg.bar, slide);
+}
+function attachGuideLineup(dlg){
+  if (dlg.querySelector(".mp3d-guide-lineup")) return;
+  var list = dlg.querySelector("div.space-y-2\\.5") || dlg.querySelector(".space-y-2\\.5");
+  if (!list){
+    dlg.querySelectorAll("div").forEach(function(d){ if (!list && (d.className || "").indexOf("space-y-2") >= 0) list = d; });
+  }
+  if (!list) return;
+  var sec = el("section", "v2-card mp3d-guide-lineup", "padding:0;overflow:hidden");
+  sec.setAttribute("aria-label", "La vue 3D — compositions d'avant-match");
+  var btn = el("button", null, "display:flex;width:100%;align-items:center;gap:12px;padding:14px 16px;text-align:left;background:transparent;border:0;color:var(--text);cursor:pointer;font:inherit");
+  btn.setAttribute("aria-expanded", "false");
+  btn.setAttribute("aria-label", "Ouvrir la rubrique La vue 3D — compositions d'avant-match");
+  var ico = el("span", null, "display:flex;height:36px;width:36px;flex:none;align-items:center;justify-content:center;border-radius:10px;background:var(--surface2);font-size:12px;font-weight:900;color:var(--gold)");
+  ico.textContent = "3D";
+  var ttl = el("span", null, "flex:1;min-width:0;font-size:17px;font-weight:800;text-transform:uppercase;letter-spacing:.4px");
+  ttl.textContent = "La vue 3D — compositions d'avant-match";
+  var chev = el("span", null, "color:var(--dim);font-size:20px;font-weight:700;transition:transform .2s");
+  chev.textContent = "›";
+  btn.appendChild(ico); btn.appendChild(ttl); btn.appendChild(chev);
+  var body = el("div", null, "border-top:1px solid var(--border);padding:12px 16px");
+  body.hidden = true;
+  var paras = [
+    "Nouvelle présentation 3D : quand un match va commencer, les deux planches d'avant-match — Composition 1/2 (ton équipe) puis Composition 2/2 (l'équipe adverse) — peuvent passer en 3D, avec l'interrupteur « Vue 2D / Vue 3D » placé au-dessus de la composition. La vue 2D reste la vue par défaut et la présentation 2D en liste ne change pas. Le déroulement de l'avant-match ne change pas non plus : passage automatique à la planche suivante, bouton Passer et coup d'envoi fonctionnent exactement comme avant, en 2D comme en 3D.",
+    "En vue 3D, la composition se présente comme à la télévision, sur un fond de terrain de football : les titulaires apparaissent ligne par ligne, en cascade, selon le système de jeu — par exemple en 4-4-2, d'abord le gardien, puis les 4 défenseurs, puis les 4 milieux, puis les 2 attaquants, chaque ligne apparaissant à son tour automatiquement. Chaque joueur est un pion aux couleurs de son club, avec son nom et sa note. Une fois le onze de départ complet, les titulaires laissent la place aux remplaçants : seuls les 7 premiers remplaçants sont présentés. La présentation recommence en boucle tant que la planche reste affichée, et la même présentation s'applique à l'équipe adverse sur la deuxième planche.",
+    "Technique : même moteur 3D que le direct, la tactique, le stade, l'écusson, la fiche joueur et le trophée (Three.js), chargé uniquement à la première ouverture d'une vue 3D. Le terrain et les joueurs sont des formes générées par le jeu, sans aucun fichier externe ni logo réel. Sans connexion lors du tout premier chargement, la vue 2D reste affichée."
+  ];
+  paras.forEach(function(t, i){
+    var p = el("p", null, "margin:" + (i ? "8px" : "0") + " 0 0;font-size:14px;line-height:1.55;color:var(--dim)");
+    p.textContent = t; body.appendChild(p);
+  });
+  btn.addEventListener("click", function(){
+    var open = body.hidden;
+    body.hidden = !open;
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    btn.setAttribute("aria-label", (open ? "Replier" : "Ouvrir") + " la rubrique La vue 3D — compositions d'avant-match");
+    chev.style.transform = open ? "rotate(90deg)" : "";
+  });
+  sec.appendChild(btn); sec.appendChild(body);
+  list.appendChild(sec);
+}
+
 /* ================= GUIDE (Fonctionnement du jeu) ================= */
 function attachGuide(dlg){
-  if (dlg.querySelector(".mp3d-guide")) { attachGuideInfra(dlg); attachGuideCrest(dlg); attachGuidePlayer(dlg); attachGuideTrophy(dlg); return; }
+  if (dlg.querySelector(".mp3d-guide")) { attachGuideInfra(dlg); attachGuideCrest(dlg); attachGuidePlayer(dlg); attachGuideTrophy(dlg); attachGuideLineup(dlg); return; }
   var list = dlg.querySelector("div.space-y-2\\.5") || dlg.querySelector(".space-y-2\\.5");
   if (!list){
     dlg.querySelectorAll("div").forEach(function(d){ if (!list && (d.className || "").indexOf("space-y-2") >= 0) list = d; });
@@ -2520,6 +2912,7 @@ function attachGuide(dlg){
   attachGuideCrest(dlg);
   attachGuidePlayer(dlg);
   attachGuideTrophy(dlg);
+  attachGuideLineup(dlg);
 }
 
 /* ================= OBSERVATEUR ================= */
@@ -2579,6 +2972,9 @@ function scan(){
   var pdlg = document.querySelector('div[role="dialog"][aria-label="Fiche joueur"]');
   if (pdlg) attachPlayer(pdlg);
   else if (player && player.view && !document.contains(player.view)) stopPlayer3D();
+  var lmain = document.querySelector('main[aria-label="Avant-match : compositions des équipes"]');
+  if (lmain) attachLineup(lmain);
+  else if (lineup && lineup.view && !document.contains(lineup.view)) stopLineup3D();
   var dlg = document.querySelector('div[role="dialog"][aria-label="Fonctionnement du jeu"]');
   if (dlg) attachGuide(dlg);
 }
